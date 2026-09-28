@@ -34,6 +34,10 @@ export type PortTask = {
   goModSha256: string;
   goSumSha256?: string;
   judgeFiles: { name: string; sha256: string }[];
+  writableFiles?: string[];
+  seedFiles?: { name: string; sha256: string }[];
+  requiredJudgeTests?: string[];
+  race?: boolean;
 };
 export const EVENT_GOAL = `移植通用 EventStream 和 FIFO 队列，package port。暂不移植 AssistantMessageEventStream。
 公开接口：type StreamItem[T any] struct { Value T; Done bool }
@@ -57,6 +61,12 @@ export async function prepareTask(o: {
   unit?: string;
   dependsOn?: string[];
   planDigest?: string;
+  writableFiles?: string[];
+  seed?: { name: string; data: Buffer }[];
+  judgeFiles?: { name: string; data: Buffer }[];
+  contract?: string;
+  requiredJudgeTests?: string[];
+  race?: boolean;
 }) {
   const source = await realpath(o.source);
   const names = [...new Set([...o.files, "LICENSE"])];
@@ -81,10 +91,21 @@ export async function prepareTask(o: {
       "独立候选不支持本地 replace；请用已发布依赖或把必要Go源码作为候选的一部分",
     );
   const sum = o.goSum ? await readFile(o.goSum) : undefined;
-  const judge = o.judge ? await snapshotFiles(await realpath(o.judge), 40) : [];
+  const judge =
+    o.judgeFiles ??
+    (o.judge ? await snapshotFiles(await realpath(o.judge), 100) : []);
+  if (o.writableFiles) for (const name of o.writableFiles) relativeName(name);
+  for (const file of o.seed ?? []) {
+    relativeName(file.name);
+    if (o.writableFiles?.includes(file.name))
+      throw new Error("前置文件不能同时可写");
+  }
   if (o.example && judge.length)
     throw new Error("内置验证器和自定义judge二选一");
-  if (o.judge && !judge.some((f) => f.name.endsWith("_test.go")))
+  if (
+    (o.judge || o.judgeFiles) &&
+    !judge.some((f) => f.name.endsWith("_test.go"))
+  )
     throw new Error("judge需要独立Go测试，测试名以TestPortsmithJudge开头");
   if (
     judge.some(
@@ -105,10 +126,12 @@ export async function prepareTask(o: {
     refs.find((f) => f.name === "LICENSE")!.data,
   );
   if (judge.length) await copyFiles(path.join(root, "judge"), judge);
+  if (o.seed?.length) await copyFiles(path.join(root, "candidate"), o.seed);
   const task: PortTask = {
     version: 1,
     revision: o.revision,
-    goal: o.goal,
+    goal:
+      o.goal + (o.contract ? `\n固定Go接口与验收约定：\n${o.contract}` : ""),
     example: o.example,
     unit: o.unit,
     planDigest: o.planDigest,
@@ -121,7 +144,11 @@ export async function prepareTask(o: {
     rulesSha256: hash(rules),
     goModSha256: hash(mod),
     goSumSha256: sum && hash(sum),
-    judgeFiles: judge.map(({ name, sha256 }) => ({ name, sha256 })),
+    judgeFiles: judge.map(({ name, data }) => ({ name, sha256: hash(data) })),
+    writableFiles: o.writableFiles,
+    seedFiles: o.seed?.map(({ name, data }) => ({ name, sha256: hash(data) })),
+    requiredJudgeTests: o.requiredJudgeTests,
+    race: o.race,
   };
   await atomicJson(path.join(root, "task.json"), task);
   return root;
@@ -159,6 +186,12 @@ export async function loadTask(rootInput: string) {
       f.sha256
     )
       throw new Error(`judge发生变化：${f.name}`);
+  for (const f of task.seedFiles ?? [])
+    if (
+      hash(await readFile(await checkedFile(root, `candidate/${f.name}`))) !==
+      f.sha256
+    )
+      throw new Error(`前置代码发生变化：${f.name}`);
   if ((await lstat(path.join(root, "candidate"))).isSymbolicLink())
     throw new Error("候选目录不能是符号链接");
   return { root, task };
@@ -181,6 +214,10 @@ export async function writeCandidate(
   if (Buffer.byteLength(content) > 256 * 1024)
     throw new Error("单文件过大，请拆分");
   const { task } = await loadTask(root);
+  if (task.writableFiles && !task.writableFiles.includes(name))
+    throw new Error(`不在当前任务可写清单：${name}`);
+  if (task.seedFiles?.some((f) => f.name === name))
+    throw new Error("不能修改已验收的前置代码");
   if (task.judgeFiles.some((f) => f.name === name))
     throw new Error("不能覆盖独立验证器路径");
   if (

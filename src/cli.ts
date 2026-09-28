@@ -9,10 +9,13 @@ import { runPort } from "./agent.js";
 import { configuredModel, loadLocalEnv } from "./model.js";
 import { judgeCheck, verifyPort } from "./verify.js";
 import { acceptTask, planStatus, taskStatus } from "./state.js";
+import { migrate } from "./migrate.js";
 
 const help = `Portsmith — 可检查、可恢复的 TS → Go 移植工作台
 
 portsmith analyze --source <源码> --out <analysis.json>
+portsmith migrate --plan <计划目录> --check
+portsmith migrate --plan <计划目录> --commit [--env-file <配置>] [--max-attempts 3] [--max-units 1]
 portsmith plan --analysis <analysis.json> --out <计划目录> --revision <版本>
 portsmith prepare --plan <计划目录> --unit <任务ID> --out <任务目录>
 portsmith prepare --source <源码> --out <任务目录> --revision <版本>
@@ -61,6 +64,10 @@ export async function main(args = process.argv.slice(2)) {
       "max-turns": { type: "string", default: "12" },
       timeout: { type: "string", default: "180" },
       "allow-download": { type: "boolean" },
+      check: { type: "boolean" },
+      commit: { type: "boolean" },
+      "max-attempts": { type: "string", default: "3" },
+      "max-units": { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -73,6 +80,56 @@ export async function main(args = process.argv.slice(2)) {
     if (typeof value !== "string" || !value) throw new Error(`缺少--${name}`);
     return value;
   };
+  if (command === "migrate") {
+    const maxTurns = Number(v["max-turns"]),
+      timeout = Number(v.timeout);
+    if (
+      !Number.isInteger(maxTurns) ||
+      maxTurns < 1 ||
+      maxTurns > 40 ||
+      !Number.isInteger(timeout) ||
+      timeout < 10 ||
+      timeout > 600
+    )
+      throw Error("max-turns范围1–40；timeout范围10–600秒");
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    process.once("SIGINT", cancel);
+    process.once("SIGTERM", cancel);
+    let connection: Awaited<ReturnType<typeof configuredModel>> | undefined;
+    try {
+      const result = await migrate({
+        plan: req("plan"),
+        commit: v.commit ?? false,
+        check: v.check,
+        maxAttempts: Number(v["max-attempts"]),
+        maxUnits: v["max-units"] ? Number(v["max-units"]) : undefined,
+        download: v["allow-download"],
+        signal: controller.signal,
+        onProgress: console.log,
+        generate: async (root, feedback) => {
+          if (!connection) {
+            loadLocalEnv(v["env-file"]);
+            connection = await configuredModel();
+          }
+          return runPort({
+            root,
+            ...connection,
+            maxTurns,
+            timeoutMs: timeout * 1000,
+            signal: controller.signal,
+            feedback,
+            onProgress: console.log,
+          });
+        },
+      });
+      console.log(JSON.stringify(result, null, 2));
+    } finally {
+      process.removeListener("SIGINT", cancel);
+      process.removeListener("SIGTERM", cancel);
+    }
+    return;
+  }
   if (command === "analyze") {
     const report = await analyze(req("source"));
     await saveAnalysis(report, req("out"));

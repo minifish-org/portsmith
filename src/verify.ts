@@ -14,7 +14,7 @@ import {
 } from "./process.js";
 
 // Bump when validation behavior changes: old receipts must not validate a new verifier.
-export const VERIFIER_VERSION = "portsmith-go-v1";
+export const VERIFIER_VERSION = "portsmith-go-v2";
 export type Verification = {
   version: 1;
   verifier: string;
@@ -219,9 +219,31 @@ export async function verifyPort(
           if (
             succeeded(judge) &&
             jc.passed >= (task.example ? 9 : 1) &&
-            jc.skipped === 0
-          )
+            jc.skipped === 0 &&
+            (task.requiredJudgeTests ?? []).every((name) =>
+              jc.passedNames.includes(name),
+            )
+          ) {
             report.status = "behavior_verified";
+            if (task.race) {
+              const race = await executeGo(
+                temp,
+                ["-run", "^TestPortsmithJudge"],
+                download,
+                true,
+              );
+              report.phases.push({ name: "race", result: race });
+              const rc = testResults(race, "TestPortsmithJudge");
+              if (
+                !succeeded(race) ||
+                rc.skipped ||
+                !(task.requiredJudgeTests ?? []).every((name) =>
+                  rc.passedNames.includes(name),
+                )
+              )
+                report.status = "behavior_failed";
+            }
+          }
         }
       }
     }

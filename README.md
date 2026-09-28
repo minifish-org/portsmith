@@ -2,9 +2,19 @@
 
 用 Pi 和你选择的模型，把一组 TypeScript 行为移植成可检查的 Go 候选。先看清范围和规则，再生成代码，最后用独立测试判断结果。
 
-这是一个可运行的 **TS → Go 命令行工作台**。支持 DeepSeek 和 OpenAI 兼容的 Chat Completions 接口。项目目前是 0.1 实验版；没有自动全库重写、自动合并或完整兼容保证。
+这是一个可运行的 **TS → Go 命令行工作台**。支持 DeepSeek 和 OpenAI 兼容的 Chat Completions 接口。项目目前是 0.1 实验版；可按已准备的计划自动推进、验收、集成并逐模块提交，不自动推断完整迁移范围或保证全量兼容。
 
-## 先跑一次，不需要模型密钥
+**实际迁移 Pith，请先读 [中文使用说明书](docs/user-manual.md)。** 正常操作只使用 `migrate`，无需逐个指定 unit、judge、out、task：
+
+```sh
+cd ../pith
+node ../portsmith/dist/cli.js migrate --plan migration --check
+node ../portsmith/dist/cli.js migrate --plan migration --commit --env-file ../omni-pi/.env --max-turns 24 --timeout 600
+```
+
+`--check` 仅检查准备情况；`--commit` 启动生成、有限修复、累计验证、实际项目集成和逐模块提交（首次也可提交准备文件，不 push）。中断后重跑同一命令继续。详见说明书中的工作区及恢复规则。
+
+## 可选演示：不需要模型密钥
 
 需要 Node.js ≥ 22.19、npm，以及本机 Go ≥ 1.24。默认关闭 CGO、Go 工具链下载和依赖下载，编译并发为 2。
 
@@ -23,7 +33,7 @@ npm run demo
 
 结果在被 Git 忽略的 `.portsmith/demo-*/`。这个状态只表示所选场景通过。
 
-## 用模型做一次真实移植
+## 可选练习：用模型移植内置 EventStream 任务
 
 ```sh
 cp .env.example .env
@@ -80,7 +90,7 @@ npm run dev -- status --plan .portsmith/plan --runs .portsmith/tasks
 npm run dev -- next --plan .portsmith/plan --runs .portsmith/tasks
 ```
 
-`next` 只列出依赖已经通过行为验证的未完成任务，不会偷偷调用模型。修改计划后已有任务显示 `plan_changed`，需要重新准备快照。第一版不自动拼接多个候选模块；明确共享接口后，由你组装 Go 项目或为一个任务提供必要候选源码。
+`next` 只列出依赖已经通过行为验证的未完成任务，不会调用模型。修改计划后已有任务显示 `plan_changed`。单步 prepare 不拼接前置模块；自动 migrate 会按 workflow.json 带入已提交源码和累计测试，保护这些前置文件不可被模型修改。
 
 ## 依赖、独立测试和导出
 

@@ -181,7 +181,11 @@ export async function loadPlan(root: string) {
       throw new Error(`任务依赖无效：${u.id}`);
   return plan;
 }
-export async function selectUnit(root: string, id: string) {
+export async function selectUnit(
+  root: string,
+  id: string,
+  sourceBase = process.cwd(),
+) {
   const plan = await loadPlan(root);
   const unit = plan.units.find((u) => u.id === id);
   if (!unit) throw new Error(`找不到任务：${id}`);
@@ -209,13 +213,21 @@ export async function selectUnit(root: string, id: string) {
     const old = analysis.files.find((f) => f.path === name);
     if (
       !old ||
-      hash(await readFile(await checkedFile(plan.source, name))) !== old.sha256
+      hash(
+        await readFile(
+          await checkedFile(path.resolve(sourceBase, plan.source), name),
+        ),
+      ) !== old.sha256
     )
       throw new Error(`源码在分析后发生变化：${name}`);
   }
   for (const c of analysis.configs)
     if (
-      hash(await readFile(await checkedFile(plan.source, c.path))) !== c.sha256
+      hash(
+        await readFile(
+          await checkedFile(path.resolve(sourceBase, plan.source), c.path),
+        ),
+      ) !== c.sha256
     )
       throw new Error(`配置在分析后发生变化：${c.path}`);
   return { plan, unit, planDigest: await planDigest(root) };

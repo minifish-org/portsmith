@@ -211,11 +211,19 @@ export async function analyze(sourceInput: string): Promise<Analysis> {
         const own = [...packages.keys()].some(
           (p) => specifier === p || specifier.startsWith(p + "/"),
         );
-        const alias = Object.keys(options.paths ?? {}).some((p) =>
-          p.includes("*")
-            ? specifier.startsWith(p.split("*")[0]) &&
-              specifier.endsWith(p.split("*")[1])
-            : p === specifier,
+        // A catch-all fallback is also tried for npm packages and Node builtins.
+        // Its mere presence does not make every unresolved bare import internal.
+        // Explicit mappings into node_modules likewise describe external packages.
+        const alias = Object.entries(options.paths ?? {}).some(
+          ([p, targets]) =>
+            p !== "*" &&
+            targets.some(
+              (target) => !target.split(/[\\/]/).includes("node_modules"),
+            ) &&
+            (p.includes("*")
+              ? specifier.startsWith(p.split("*")[0]) &&
+                specifier.endsWith(p.split("*")[1])
+              : p === specifier),
         );
         const unresolved =
           specifier.startsWith(".") ||

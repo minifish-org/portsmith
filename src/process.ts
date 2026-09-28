@@ -6,7 +6,7 @@ export type ProcessResult = {
   truncated: boolean;
   log: string;
 };
-export function cleanEnv(download = false): NodeJS.ProcessEnv {
+export function cleanEnv(download = false, race = false): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
@@ -15,7 +15,7 @@ export function cleanEnv(download = false): NodeJS.ProcessEnv {
     GOMAXPROCS: "2",
     GOMEMLIMIT: "512MiB",
     GOTOOLCHAIN: "local",
-    CGO_ENABLED: "0",
+    CGO_ENABLED: race ? "1" : "0",
     GOENV: "off",
     GOWORK: "off",
     GOPROXY: download ? "https://proxy.golang.org" : "off",
@@ -28,11 +28,12 @@ export async function execute(
   cwd: string,
   timeoutMs = 60000,
   download = false,
+  race = false,
 ): Promise<ProcessResult> {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd,
-      env: cleanEnv(download),
+      env: cleanEnv(download, race),
       detached: process.platform !== "win32",
     });
     let log = "",
@@ -68,6 +69,7 @@ export const executeGo = (
   directory: string,
   args: string[],
   download = false,
+  race = false,
 ) =>
   execute(
     "go",
@@ -79,12 +81,14 @@ export const executeGo = (
       "1",
       "-count=1",
       "-timeout=20s",
+      ...(race ? ["-race"] : []),
       ...args,
       "./...",
     ],
     directory,
     60000,
     download,
+    race,
   );
 export function testResults(result: ProcessResult, prefix = "") {
   const events = result.log.split("\n").flatMap((line) => {
@@ -101,6 +105,11 @@ export function testResults(result: ProcessResult, prefix = "") {
     passed: tests.filter((e) => e.Action === "pass").length,
     failed: tests.filter((e) => e.Action === "fail").length,
     skipped: tests.filter((e) => e.Action === "skip").length,
+    passedNames: [
+      ...new Set(
+        tests.filter((e) => e.Action === "pass").map((e) => e.Test as string),
+      ),
+    ],
   };
 }
 export const succeeded = (r: ProcessResult) =>

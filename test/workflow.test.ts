@@ -69,6 +69,41 @@ test("a clean file graph can still produce a cyclic Go package graph", async (t)
   const plan = await createPlan(file, path.join(dir, "plan"), "test");
   assert.equal(packageCycles(plan.units).length, 1);
 });
+test("catch-all paths and node_modules aliases do not turn external packages into missing internal files", async (t) => {
+  const { source, put } = await fixture(t);
+  await put(
+    "tsconfig.json",
+    JSON.stringify({
+      compilerOptions: {
+        baseUrl: ".",
+        paths: {
+          "*": ["./*"],
+          typebox: ["./node_modules/typebox"],
+          "@local/*": ["./src/*"],
+        },
+      },
+    }),
+  );
+  await put(
+    "main.ts",
+    "import 'node:fs'; import 'vitest'; import 'typebox'; import '@local/missing'; import 'helper';",
+  );
+  await put("helper.ts", "export const value=1;");
+  const report = await analyze(source),
+    edges = report.files.find((f) => f.path === "main.ts")!.imports;
+  assert.deepEqual(
+    edges.filter((e) => e.kind === "external").map((e) => e.specifier),
+    ["node:fs", "vitest", "typebox"],
+  );
+  assert.deepEqual(
+    edges.filter((e) => e.kind === "unresolved").map((e) => e.specifier),
+    ["@local/missing"],
+  );
+  assert.equal(
+    edges.find((e) => e.specifier === "helper")?.target,
+    "helper.ts",
+  );
+});
 test("plan requires acceptance and detects source/config drift", async (t) => {
   const { source, dir, put } = await fixture(t);
   await put("main.ts", "export const answer=42;");
@@ -333,3 +368,38 @@ test("approved dependency manifests are frozen and local replacements are reject
     /本地 replace/,
   );
 });
+
+test(
+  "required named judge cases cannot be replaced by a single passing test",
+  { timeout: 60000 },
+  async (t) => {
+    const { dir, source, put } = await fixture(t);
+    await put("unit.ts", "export const answer=42;");
+    const root = await prepareTask({
+      source,
+      out: path.join(dir, "task"),
+      revision: "fixture",
+      files: ["unit.ts"],
+      goal: "answer",
+      requiredJudgeTests: [
+        "TestPortsmithJudgePresent",
+        "TestPortsmithJudgeMissing",
+      ],
+      judgeFiles: [
+        {
+          name: "judge_test.go",
+          data: Buffer.from(
+            'package port\nimport "testing"\nfunc TestPortsmithJudgePresent(t *testing.T){if Answer!=42{t.Fatal(Answer)}}\n',
+          ),
+        },
+      ],
+    });
+    await writeCandidate(root, "answer.go", "package port\nconst Answer=42\n");
+    await writeCandidate(
+      root,
+      "answer_test.go",
+      'package port\nimport "testing"\nfunc TestCandidate(t *testing.T){}\n',
+    );
+    assert.equal((await verifyPort(root)).status, "behavior_failed");
+  },
+);
