@@ -1,0 +1,41 @@
+{
+  "name": "@minifish/portsmith",
+  "version": "0.1.0",
+  "description": "An inspectable TS-to-Go migration workbench powered by Pi",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "bin": {
+    "portsmith": "bin/portsmith.mjs"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "examples",
+    "README.md",
+    "LICENSE",
+    "docs"
+  ],
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc --noEmit",
+    "test": "tsx --test --test-concurrency=1 test/*.test.ts",
+    "demo": "tsx src/demo.ts",
+    "format": "prettier --write src test docs README.md package.json tsconfig*.json",
+    "format:check": "prettier --check src test docs README.md package.json tsconfig*.json"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "0.87.1",
+    "@earendil-works/pi-coding-agent": "0.87.1",
+    "tsx": "4.23.15",
+    "typescript-api": "npm:typescript@5.9.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.4",
+    "prettier": "3.6.2",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,0 +1,21 @@
+name: Check
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.2'
+          cache: false
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run demo
+      - run: npm run build
+      - run: node bin/portsmith.mjs --help
