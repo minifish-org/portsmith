@@ -11,29 +11,31 @@ import { judgeCheck, verifyPort } from "./verify.js";
 import { acceptTask, planStatus, taskStatus } from "./state.js";
 import { migrate } from "./migrate.js";
 
-const help = `Portsmith — 可检查、可恢复的 TS → Go 移植工作台
+const help = `Portsmith — an inspectable, resumable TypeScript-to-Go migration workbench
 
-portsmith analyze --source <源码> --out <analysis.json>
-portsmith migrate --plan <计划目录> --check
-portsmith migrate --plan <计划目录> --commit [--env-file <配置>] [--max-attempts 3] [--max-units 1]
-portsmith plan --analysis <analysis.json> --out <计划目录> --revision <版本>
-portsmith prepare --plan <计划目录> --unit <任务ID> --out <任务目录>
-portsmith prepare --source <源码> --out <任务目录> --revision <版本>
-                  --file <相对文件> [--file <测试>] --goal <目标>
-portsmith prepare --source <Pi源码> --out <任务目录> --revision <版本> --example event-stream
-portsmith run --task <任务目录> [--env-file <配置>] [--feedback <审阅意见.md>] [--max-turns 12] [--timeout 180]
-portsmith judge-check --task <任务目录>
-portsmith verify --task <任务目录> [--allow-download]
-portsmith status --task <任务目录>
-portsmith status --plan <计划目录> --runs <任务父目录>
-portsmith next --plan <计划目录> --runs <任务父目录>
-portsmith accept --task <任务目录> --out <新的导出目录>
+portsmith analyze --source <source> --out <analysis.json>
+portsmith migrate --plan <plan-directory> --check
+portsmith migrate --plan <plan-directory> --commit [--env-file <file>] [--max-attempts 0] [--max-units 1]
+portsmith plan --analysis <analysis.json> --out <plan-directory> --revision <revision>
+portsmith prepare --plan <plan-directory> --unit <unit-id> --out <task-directory>
+portsmith prepare --source <source> --out <task-directory> --revision <revision>
+                  --file <relative-file> [--file <test>] --goal <goal>
+portsmith prepare --source <pi-source> --out <task-directory> --revision <revision> --example event-stream
+portsmith run --task <task-directory> [--env-file <file>] [--feedback <review.md>] [--max-turns <turns>] [--timeout <seconds>]
+portsmith judge-check --task <task-directory>
+portsmith verify --task <task-directory> [--allow-download]
+portsmith status --task <task-directory>
+portsmith status --plan <plan-directory> --runs <runs-directory>
+portsmith next --plan <plan-directory> --runs <runs-directory>
+portsmith accept --task <task-directory> --out <new-export-directory>
 
-prepare可选：--rules <规则.md> --go-mod <go.mod> --go-sum <go.sum> --judge <独立测试目录>
-模型只写候选，不执行代码。verify/ judge-check执行本机代码，不是OS沙箱。
-第三方Go库允许；依赖清单冻结，默认不下载。--allow-download只用于显式验证。
-analyze/plan不调用模型；计划需人工补全验收条件。不会自动合并或发布。
-源码修订是用户标签；SHA-256验证选定文件，不冒充Git身份验证。
+prepare options: --rules <rules.md> --go-mod <go.mod> --go-sum <go.sum> --judge <judge-directory>
+Uses Pi Coding Agent's native tools, persistent sessions, skills and extensions. Local execution is not an OS sandbox.
+Default: unlimited model turns, repair attempts and runtime. Positive --max-turns / --max-attempts / --timeout values set budgets; 0 disables them. Ctrl-C preserves progress.
+Mature Go dependencies are allowed. Manifests are frozen; --allow-download permits verifier dependency downloads.
+analyze/plan do not call models. Review and complete acceptance contracts before execution. No automatic push or publication.
+Revision labels are user-supplied; selected files are checked by SHA-256, not authenticated as a Git identity.
+v2 requires all batches prepared before starting. needs-preparation reports gaps before model calls. --max-units counts complete modules.
 `;
 export async function main(args = process.argv.slice(2)) {
   const [command, ...rest] = args;
@@ -61,12 +63,12 @@ export async function main(args = process.argv.slice(2)) {
       task: { type: "string" },
       "env-file": { type: "string" },
       feedback: { type: "string" },
-      "max-turns": { type: "string", default: "12" },
-      timeout: { type: "string", default: "180" },
+      "max-turns": { type: "string", default: "0" },
+      timeout: { type: "string", default: "0" },
       "allow-download": { type: "boolean" },
       check: { type: "boolean" },
       commit: { type: "boolean" },
-      "max-attempts": { type: "string", default: "3" },
+      "max-attempts": { type: "string", default: "0" },
       "max-units": { type: "string" },
       help: { type: "boolean", short: "h" },
     },
@@ -84,14 +86,15 @@ export async function main(args = process.argv.slice(2)) {
     const maxTurns = Number(v["max-turns"]),
       timeout = Number(v.timeout);
     if (
-      !Number.isInteger(maxTurns) ||
-      maxTurns < 1 ||
-      maxTurns > 40 ||
-      !Number.isInteger(timeout) ||
-      timeout < 10 ||
-      timeout > 600
+      !Number.isSafeInteger(maxTurns) ||
+      maxTurns < 0 ||
+      !Number.isSafeInteger(timeout) ||
+      timeout < 0 ||
+      timeout * 1000 > 2147483647
     )
-      throw Error("max-turns范围1–40；timeout范围10–600秒");
+      throw Error(
+        "max-turns必须为非负整数；timeout必须为0–2147483秒；0表示不限制",
+      );
     const controller = new AbortController();
     const cancel = () => controller.abort();
     process.once("SIGINT", cancel);
@@ -111,12 +114,16 @@ export async function main(args = process.argv.slice(2)) {
           if (!connection) {
             loadLocalEnv(v["env-file"]);
             connection = await configuredModel();
+            console.log(
+              `模型：${connection.model.id}；单次输出上限：${connection.model.maxTokens} tokens；工作上下文：${connection.model.contextWindow} tokens`,
+            );
           }
           return runPort({
             root,
             ...connection,
             maxTurns,
             timeoutMs: timeout * 1000,
+            download: v["allow-download"],
             signal: controller.signal,
             feedback,
             onProgress: console.log,
@@ -124,6 +131,7 @@ export async function main(args = process.argv.slice(2)) {
         },
       });
       console.log(JSON.stringify(result, null, 2));
+      if (result.status === "needs-preparation") process.exitCode = 2;
     } finally {
       process.removeListener("SIGINT", cancel);
       process.removeListener("SIGTERM", cancel);
@@ -258,19 +266,18 @@ export async function main(args = process.argv.slice(2)) {
     const maxTurns = Number(v["max-turns"]),
       timeout = Number(v.timeout);
     if (
-      !Number.isInteger(maxTurns) ||
-      maxTurns < 1 ||
-      maxTurns > 40 ||
-      !Number.isInteger(timeout) ||
-      timeout < 10 ||
-      timeout > 600
+      !Number.isSafeInteger(maxTurns) ||
+      maxTurns < 0 ||
+      !Number.isSafeInteger(timeout) ||
+      timeout < 0 ||
+      timeout * 1000 > 2147483647
     )
-      throw new Error("max-turns范围1–40；timeout范围10–600秒");
+      throw new Error(
+        "max-turns必须为非负整数；timeout必须为0–2147483秒；0表示不限制",
+      );
     const feedback = v.feedback
       ? await readFile(v.feedback, "utf8")
       : undefined;
-    if (feedback && Buffer.byteLength(feedback) > 32000)
-      throw new Error("审阅反馈超过32KiB，请缩小范围");
     loadLocalEnv(v["env-file"]);
     const { runtime, model } = await configuredModel();
     const controller = new AbortController();
@@ -278,19 +285,22 @@ export async function main(args = process.argv.slice(2)) {
     process.once("SIGINT", cancel);
     process.once("SIGTERM", cancel);
     try {
-      console.log(`模型：${model.id}，最多${maxTurns}轮`);
+      console.log(
+        `模型：${model.id}，${maxTurns ? `最多${maxTurns}轮` : "不限制轮数"}`,
+      );
       const report = await runPort({
         root,
         runtime,
         model,
         maxTurns,
         timeoutMs: timeout * 1000,
+        download: v["allow-download"],
         signal: controller.signal,
         onProgress: console.log,
         feedback,
       });
       console.log(
-        `${report.text ?? ""}\n${report.status} · ${report.turns}轮；请检查候选后运行verify。`,
+        `${report.text ?? ""}\n${report.status} · ${report.turns}轮；会话已保存，正式接受仍以独立验收为准。`,
       );
       if (report.status !== "candidate_ready") process.exitCode = 1;
     } finally {

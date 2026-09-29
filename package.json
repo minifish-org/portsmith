@@ -16,7 +16,10 @@
     "examples",
     "README.md",
     "LICENSE",
-    "docs"
+    "docs",
+    "README.zh-CN.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md"
   ],
   "scripts": {
     "dev": "tsx src/cli.ts",
@@ -37,5 +40,13 @@
     "@types/node": "22.20.4",
     "prettier": "3.6.2",
     "typescript": "7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/minifish-org/portsmith.git"
+  },
+  "homepage": "https://github.com/minifish-org/portsmith#readme",
+  "bugs": {
+    "url": "https://github.com/minifish-org/portsmith/issues"
   }
 }

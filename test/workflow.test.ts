@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { analyze, saveAnalysis } from "../src/analyze.js";
 import { createPlan, packageCycles, selectUnit } from "../src/plan.js";
-import { atomicJson, withLock } from "../src/files.js";
+import { atomicJson, withLock, snapshotFiles } from "../src/files.js";
 import {
   prepareTask,
   writeCandidate,
@@ -14,7 +14,29 @@ import {
 } from "../src/workspace.js";
 import { verifyPort } from "../src/verify.js";
 import { acceptTask, taskStatus, planStatus } from "../src/state.js";
-import { execute } from "../src/process.js";
+import { execute, cleanEnv } from "../src/process.js";
+
+test("default snapshots and process logs exceed former limits without truncation", async (t) => {
+  const { source, put } = await fixture(t);
+  for (let i = 0; i < 2001; i++) await put(`${i}.txt`, "fixture");
+  await put("large.txt", "x".repeat(33 * 1024 * 1024));
+  const files = await snapshotFiles(source);
+  assert.equal(files.length, 2003);
+  assert.equal(
+    files.find((f) => f.name === "large.txt")!.data.length,
+    33 * 1024 * 1024,
+  );
+  const result = await execute(
+    process.execPath,
+    ["-e", "process.stdout.write('x'.repeat(17*1024*1024))"],
+    source,
+  );
+  assert.equal(result.code, 0);
+  assert.equal(result.log.length, 17 * 1024 * 1024);
+  assert.equal(result.truncated, false);
+  assert.equal(cleanEnv().GOMAXPROCS, undefined);
+  assert.equal(cleanEnv().GOMEMLIMIT, undefined);
+});
 
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const dir = await mkdtemp(path.join(tmpdir(), "portsmith-test-"));
@@ -209,6 +231,38 @@ test("process runner enforces timeouts without passing provider credentials", as
     100,
   );
   assert.equal(timeout.timedOut, true);
+  const controller = new AbortController();
+  const pending = execute(
+    process.execPath,
+    ["-e", "setInterval(()=>{},1000)"],
+    dir,
+    30000,
+    false,
+    false,
+    undefined,
+    controller.signal,
+  );
+  const timer = setTimeout(() => controller.abort(), 100);
+  const cancelled = await pending;
+  clearTimeout(timer);
+  assert.equal(cancelled.cancelled, true);
+  assert.equal(cancelled.timedOut, false);
+  assert.notEqual(cancelled.code, 0);
+  assert.equal(
+    (
+      await execute(
+        process.execPath,
+        ["-e", "console.log('should not execute')"],
+        dir,
+        1000,
+        false,
+        false,
+        undefined,
+        controller.signal,
+      )
+    ).log,
+    "操作已取消",
+  );
 });
 test(
   "independent judge gates acceptance; edits invalidate receipts; replay cannot overwrite export",

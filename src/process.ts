@@ -4,6 +4,7 @@ export type ProcessResult = {
   code: number | null;
   timedOut: boolean;
   truncated: boolean;
+  cancelled?: boolean;
   log: string;
 };
 export function cleanEnv(download = false, race = false): NodeJS.ProcessEnv {
@@ -12,8 +13,6 @@ export function cleanEnv(download = false, race = false): NodeJS.ProcessEnv {
     HOME: process.env.HOME,
     TMPDIR: process.env.TMPDIR,
     SystemRoot: process.env.SystemRoot,
-    GOMAXPROCS: "2",
-    GOMEMLIMIT: "512MiB",
     GOTOOLCHAIN: "local",
     CGO_ENABLED: race ? "1" : "0",
     GOENV: "off",
@@ -26,10 +25,20 @@ export async function execute(
   command: string,
   args: string[],
   cwd: string,
-  timeoutMs = 60000,
+  timeoutMs = 0,
   download = false,
   race = false,
+  maxLogChars = Infinity,
+  signal?: AbortSignal,
 ): Promise<ProcessResult> {
+  if (signal?.aborted)
+    return {
+      code: null,
+      timedOut: false,
+      truncated: false,
+      cancelled: true,
+      log: "操作已取消",
+    };
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd,
@@ -38,30 +47,50 @@ export async function execute(
     });
     let log = "",
       timedOut = false,
-      truncated = false;
+      truncated = false,
+      cancelled = false;
     const record = (data: Buffer) => {
       log += data.toString();
-      if (log.length > 400000) {
-        log = log.slice(-400000);
+      if (log.length > maxLogChars) {
+        log = log.slice(-maxLogChars);
         truncated = true;
       }
     };
     child.stdout.on("data", record);
     child.stderr.on("data", record);
-    const timer = setTimeout(() => {
-      timedOut = true;
+    const kill = () => {
       try {
         if (process.platform !== "win32" && child.pid)
           process.kill(-child.pid, "SIGKILL");
         else child.kill("SIGKILL");
       } catch {}
-    }, timeoutMs);
+    };
+    const abort = () => {
+      cancelled = true;
+      kill();
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    const timer =
+      timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            kill();
+          }, timeoutMs)
+        : undefined;
     child.on("error", (e) => {
       log += e.message;
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ code, timedOut, truncated, log });
+      signal?.removeEventListener("abort", abort);
+      resolve({
+        code,
+        timedOut,
+        truncated,
+        log,
+        ...(cancelled ? { cancelled: true } : {}),
+      });
     });
   });
 }
@@ -70,6 +99,7 @@ export const executeGo = (
   args: string[],
   download = false,
   race = false,
+  signal?: AbortSignal,
 ) =>
   execute(
     "go",
@@ -77,18 +107,18 @@ export const executeGo = (
       "test",
       "-json",
       "-mod=readonly",
-      "-p",
-      "1",
       "-count=1",
-      "-timeout=20s",
+      "-timeout=0",
       ...(race ? ["-race"] : []),
       ...args,
       "./...",
     ],
     directory,
-    60000,
+    0,
     download,
     race,
+    undefined,
+    signal,
   );
 export function testResults(result: ProcessResult, prefix = "") {
   const events = result.log.split("\n").flatMap((line) => {
@@ -113,4 +143,4 @@ export function testResults(result: ProcessResult, prefix = "") {
   };
 }
 export const succeeded = (r: ProcessResult) =>
-  r.code === 0 && !r.timedOut && !r.truncated;
+  r.code === 0 && !r.timedOut && !r.truncated && !r.cancelled;

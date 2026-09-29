@@ -21,6 +21,7 @@ import {
   prepareTask,
 } from "./workspace.js";
 import { currentVerification, verifyPort, VERIFIER_VERSION } from "./verify.js";
+import { verificationDiagnostics } from "./diagnostics.js";
 
 type File = { name: string; data: Buffer };
 type Entry = { name: string; sha256: string };
@@ -55,15 +56,15 @@ type State = {
 };
 const exec = promisify(execFile);
 
-async function git(root: string, args: string[]) {
+export async function git(root: string, args: string[]) {
   const result = await exec("git", args, {
     cwd: root,
     env: cleanEnv(),
-    maxBuffer: 2 * 1024 * 1024,
+    maxBuffer: Infinity,
   });
   return result.stdout.trimEnd();
 }
-async function exists(file: string) {
+export async function exists(file: string) {
   try {
     await lstat(file);
     return true;
@@ -72,7 +73,7 @@ async function exists(file: string) {
     throw e;
   }
 }
-async function dirty(root: string) {
+export async function dirty(root: string) {
   // NUL-delimited porcelain also handles spaces; renames are rejected rather than guessed.
   const data = await git(root, [
     "status",
@@ -85,16 +86,16 @@ async function dirty(root: string) {
     throw Error("请先处理 Git 重命名，再继续迁移");
   return entries.map((e) => e.slice(3));
 }
-function allows(name: string, roots: string[]) {
+export function allows(name: string, roots: string[]) {
   return roots.some((r) => name === r || name.startsWith(r + "/"));
 }
-async function commit(root: string, names: string[], message: string) {
+export async function commit(root: string, names: string[], message: string) {
   if (!names.length) throw Error("拒绝空提交");
   await git(root, ["add", "--", ...names]);
   await git(root, ["commit", "--only", "-m", message, "--", ...names]);
   return git(root, ["rev-parse", "HEAD"]);
 }
-async function assertFiles(root: string, files: Entry[]) {
+export async function assertFiles(root: string, files: Entry[]) {
   for (const f of files)
     if (hash(await readFile(await checkedFile(root, f.name))) !== f.sha256)
       throw Error(`已冻结/集成文件发生变化：${f.name}`);
@@ -148,7 +149,7 @@ export async function inspectMigration(planInput: string) {
     relativeName(spec.contract);
     relativeName(spec.judge);
     const contract = await readFile(await checkedFile(planRoot, spec.contract));
-    const judge = await snapshotFiles(path.join(planRoot, spec.judge), 100);
+    const judge = await snapshotFiles(path.join(planRoot, spec.judge));
     const text = judge
       .filter((f) => f.name.endsWith("_test.go"))
       .map((f) => f.data.toString())
@@ -203,10 +204,21 @@ export type MigrationOptions = {
   download?: boolean;
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
-  generate: (task: string, feedback?: string) => Promise<{ status: string }>;
+  generate: (
+    task: string,
+    feedback?: string,
+  ) => Promise<{ status: string; error?: string; stopReason?: string }>;
 };
 
 export async function migrate(options: MigrationOptions) {
+  const workflow = await readJson<{ version: number }>(
+    options.plan,
+    "workflow.json",
+  );
+  if (workflow.version === 2) {
+    const { migrateModules } = await import("./modules.js");
+    return migrateModules(options);
+  }
   const inspected = await inspectMigration(options.plan);
   const { project, planRoot, config, units, digest, mod, sum } = inspected;
   if (options.check)
@@ -223,16 +235,15 @@ export async function migrate(options: MigrationOptions) {
     throw Error(
       "自动集成需要 --commit，表示允许准备提交及每模块提交；不会 push",
     );
-  const maxAttempts = options.maxAttempts ?? 3,
+  const maxAttempts = options.maxAttempts ?? 0,
     maxUnits = options.maxUnits ?? units.length;
   if (
     !Number.isInteger(maxAttempts) ||
-    maxAttempts < 1 ||
-    maxAttempts > 10 ||
+    maxAttempts < 0 ||
     !Number.isInteger(maxUnits) ||
     maxUnits < 1
   )
-    throw Error("max-attempts 应为1–10，max-units 应为正整数");
+    throw Error("max-attempts 应为非负整数（0 不限制），max-units 应为正整数");
   const log = options.onProgress ?? (() => {});
   const checkCancel = () => {
     if (options.signal?.aborted)
@@ -262,10 +273,7 @@ export async function migrate(options: MigrationOptions) {
       const pending = state.pending;
       if (!pending) return;
       const taskRoot = path.join(project, config.runs, pending.id);
-      const staged = await snapshotFiles(
-        path.join(taskRoot, "integration"),
-        400,
-      );
+      const staged = await snapshotFiles(path.join(taskRoot, "integration"));
       if (
         JSON.stringify(
           staged
@@ -336,6 +344,7 @@ export async function migrate(options: MigrationOptions) {
           [],
           options.download,
           task.race,
+          options.signal,
         );
         await atomicJson(
           path.join(taskRoot, "integration-tests.json"),
@@ -506,9 +515,9 @@ export async function migrate(options: MigrationOptions) {
             verification.report.status !== "behavior_verified";
             attempt++
           ) {
-            if (attempt >= maxAttempts)
+            if (maxAttempts > 0 && attempt >= maxAttempts)
               throw Error(
-                `${unit.id} 已达到本次 ${maxAttempts} 次生成/修复上限；查看验证诊断后重跑同一命令继续`,
+                `${unit.id} 已达到本次 ${maxAttempts} 次生成/修复上限；候选与进度保留，重跑同一命令可继续。\n${verification?.current ? verificationDiagnostics(verification.report, 2000) : (feedback ?? "尚无有效验证报告")}\n报告：${path.join(taskRoot, "verification.json")}`,
               );
             checkCancel();
             state.attempts[unit.id] = (state.attempts[unit.id] ?? 0) + 1;
@@ -516,9 +525,17 @@ export async function migrate(options: MigrationOptions) {
             log(`${unit.id} 生成/修复，第 ${state.attempts[unit.id]} 次`);
             const result = await options.generate(taskRoot, feedback);
             checkCancel();
-            if (["model_error", "cancelled"].includes(result.status))
+            if (
+              [
+                "model_error",
+                "cancelled",
+                "output_limit",
+                "turn_limit",
+                "timeout",
+              ].includes(result.status)
+            )
               throw Error(
-                `${unit.id} 模型运行失败：${result.status}；候选与进度已保留`,
+                `${unit.id} 模型运行失败：${result.error ?? result.status}；详情：${path.join(taskRoot, "last-run.json")}；候选与进度已保留`,
               );
             try {
               const files = await candidateFiles(taskRoot);
@@ -536,7 +553,11 @@ export async function migrate(options: MigrationOptions) {
               ]);
               if (files.some((f) => !allowed.has(f.name)))
                 throw Error("候选有未授权输出");
-              const report = await verifyPort(taskRoot, options.download);
+              const report = await verifyPort(
+                taskRoot,
+                options.download,
+                options.signal,
+              );
               verification = await currentVerification(taskRoot);
               feedback =
                 report.status === "behavior_verified"

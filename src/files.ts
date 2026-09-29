@@ -70,8 +70,14 @@ export async function withLock<T>(rootInput: string, fn: () => Promise<T>) {
     await rm(lock, { force: true });
   }
 }
-export async function snapshotFiles(root: string, maxFiles = 200) {
+export async function snapshotFiles(
+  root: string,
+  maxFiles = Infinity,
+  maxBytes = Infinity,
+  maxFileBytes: (name: string) => number = () => Infinity,
+) {
   const files: { name: string; data: Buffer; sha256: string }[] = [];
+  let totalBytes = 0;
   if ((await lstat(root)).isSymbolicLink()) throw new Error("不允许符号链接");
   async function visit(dir: string) {
     for (const e of (
@@ -82,14 +88,12 @@ export async function snapshotFiles(root: string, maxFiles = 200) {
       if (e.isDirectory()) await visit(name);
       else {
         const file = await checkedFile(root, name);
-        if ((await lstat(file)).size > 512 * 1024)
+        if ((await lstat(file)).size > Math.min(maxBytes, maxFileBytes(name)))
           throw new Error(`文件太大：${name}`);
         const data = await readFile(file);
         files.push({ name, data, sha256: hash(data) });
-        if (
-          files.length > maxFiles ||
-          files.reduce((n, f) => n + f.data.length, 0) > 4 * 1024 * 1024
-        )
+        totalBytes += data.length;
+        if (files.length > maxFiles || totalBytes > maxBytes)
           throw new Error("任务太大，请拆成更小模块");
       }
     }

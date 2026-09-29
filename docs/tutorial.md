@@ -12,7 +12,7 @@
 
 ## 2. 看模型究竟能做什么
 
-读 `src/agent.ts` 中的四个工具。
+读 `src/agent.ts` 中的 Pi 原生工具启用、`verify_candidate` 和会话恢复配置。
 
 - `read_reference` 只能读参考清单中的文件。
 - `read_candidate` 可以查看已有候选。
@@ -42,7 +42,7 @@ npm run dev -- status --task <task>
 
 按README创建一个新的任务，再运行 `run`。它不使用离线示例的答案；参考输入只有原TS、测试、许可证和规则。可用 `--max-turns` 和 `--timeout` 限制每次运行，已有候选在中断后保留。
 
-读 `run-*.jsonl` 能看到模型什么时候读源码、调用了哪些工具、写了哪些文件。先检查代码，再执行verify。失败后再次run，它会读上次诊断进行修复。
+读 `run-*.jsonl` 能看到模型什么时候读源码、调用了哪些工具、写了哪些文件。Pi 在当前会话内编译、测试、修复并调用 verify_candidate；再次 run 会恢复对话并带入最新诊断。正式接受仍要通过外层独立验证。
 
 ## 6. 给自己的模块准备judge
 
@@ -57,6 +57,6 @@ my-judge/
 
 测试函数必须以 `TestPortsmithJudge` 开头。可以使用共享JSON输入和原TS产生的预期数据，让Go实现读取同样输入并比较输出。多包候选中，目录层级应对应候选Go包。
 
-创建任务时加入 `--judge my-judge`。Portsmith冻结这份测试，模型只能读写candidate。第一次可以故意提供错误Go实现，确认独立测试失败。没有独立judge的普通任务，只能得到自测通过状态。
+创建任务时加入 `--judge my-judge`。Portsmith冻结这份测试，任务约定只修改 candidate，验收会检查冻结文件未被改动；原生工具并非操作系统沙箱。第一次可以故意提供错误Go实现，确认独立测试失败。没有独立judge的普通任务，只能得到自测通过状态。
 
 确认结果后用 `accept` 导出到新目录，再由你决定怎样纳入Pith。导出的是Go源码模块，不是桌面安装包或服务器成品。

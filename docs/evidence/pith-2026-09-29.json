@@ -1,0 +1,234 @@
+{
+  "schema": "pith.migration-evidence/v1",
+  "capturedAt": "2026-09-29T10:00:22.346286+00:00",
+  "source": {
+    "repository": "https://github.com/earendil-works/pi",
+    "version": "0.87.1",
+    "revision": "f07218c4d4bbc12bef056a7058c3dd49dfe41abe"
+  },
+  "targetRevision": "0d4d1479739fcbe849fec21fc02cf8ac31aee237",
+  "status": "complete",
+  "acceptedSteps": 26,
+  "modules": [
+    {
+      "id": "ai",
+      "commit": "a5aeab8214f672d5d83e35fec78bf4d0daf67473",
+      "stepCount": 13,
+      "steps": [
+        "ai/ai-foundation/eventstream",
+        "ai/ai-foundation/types",
+        "ai/ai-foundation/catalog",
+        "ai/ai-utils/port",
+        "ai/ai-auth/port",
+        "ai/ai-models/port",
+        "ai/ai-openai/port",
+        "ai/ai-anthropic/port",
+        "ai/ai-google/port",
+        "ai/ai-bedrock/port",
+        "ai/ai-other-protocols/port",
+        "ai/ai-providers/port",
+        "ai/ai-surface/port"
+      ],
+      "receipt": "migration/results/ai.json",
+      "receiptSha256": "e447305fc9307a7a49fa9f81fef4b18310b0150061b2c46d7b2ba0cf6178dbba",
+      "acceptedAt": "2026-09-29T01:12:37.470Z",
+      "verifier": "portsmith-go-v3",
+      "status": "behavior_verified",
+      "fingerprint": "7590e001185a2ad46e04977e9246f980cf4c5bad9bf9590fce8762a05f2173dc",
+      "planSha256": "3ac5a2e835a93358b5bd33b95ea5ca7ac549b0d1ae3aa67d687e4f5798c15ef0",
+      "phases": [
+        {
+          "name": "compile",
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        },
+        {
+          "name": "vet",
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        },
+        {
+          "name": "candidate-tests",
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        },
+        {
+          "name": "independent-behavior",
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        },
+        {
+          "name": "race",
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        }
+      ]
+    },
+    {
+      "id": "core",
+      "commit": "adbc36268f0c0cad3f5aad7c591b5f0a18f79ac0",
+      "stepCount": 7,
+      "steps": [
+        "core/core-contracts/port",
+        "core/core-loop/port",
+        "core/core-resources/port",
+        "core/core-session/port",
+        "core/core-compaction/port",
+        "core/core-runtime/port",
+        "core/core-harness/port"
+      ],
+      "receipt": "migration/results/core.json",
+      "receiptSha256": "10dbe947d54a25603a9d0c158519c541f4df6c14395204e04c5c35973164b498",
+      "acceptedAt": "2026-09-29T08:44:38.898Z",
+      "verifier": "portsmith-go-v3",
+      "status": "behavior_verified",
+      "fingerprint": "1a03176fb12b708978ecdab69028a17ff51a94dbf96f05ee342888008750564c",
+      "planSha256": "3ac5a2e835a93358b5bd33b95ea5ca7ac549b0d1ae3aa67d687e4f5798c15ef0",
+      "phases": [
+        {
+          "name": "compile",
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        },
+        {
+          "name": "vet",
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        },
+        {
+          "name": "candidate-tests",
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        },
+        {
+          "name": "independent-behavior",
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        },
+        {
+          "name": "race",
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        }
+      ]
+    },
+    {
+      "id": "tools",
+      "commit": "0d4d1479739fcbe849fec21fc02cf8ac31aee237",
+      "stepCount": 6,
+      "steps": [
+        "tools/tools-env/port",
+        "tools/tools-read/port",
+        "tools/tools-write/port",
+        "tools/tools-edit/port",
+        "tools/tools-bash/port",
+        "tools/tools-delivery/port"
+      ],
+      "receipt": "migration/results/tools.json",
+      "receiptSha256": "71c38cfd739ec154f0c3e7a903b3bd433064253574be361ec079b34466b692da",
+      "acceptedAt": "2026-09-29T09:28:08.949Z",
+      "verifier": "portsmith-go-v3",
+      "status": "behavior_verified",
+      "fingerprint": "4526d5330b2696f59b08d31058d379e2fa55149087ab24b3da2217e1ae21d6f0",
+      "planSha256": "3ac5a2e835a93358b5bd33b95ea5ca7ac549b0d1ae3aa67d687e4f5798c15ef0",
+      "phases": [
+        {
+          "name": "compile",
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        },
+        {
+          "name": "vet",
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        },
+        {
+          "name": "candidate-tests",
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        },
+        {
+          "name": "independent-behavior",
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        },
+        {
+          "name": "race",
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        }
+      ]
+    }
+  ],
+  "fullParityProven": false,
+  "notes": [
+    "Summary derived from original receipts and local progress journal. Raw model conversations are not exported.",
+    "The executed Portsmith implementation included uncommitted local changes; its previous HEAD alone does not reproduce the run.",
+    "Historical plan documents are retained unchanged; their preparation-time status labels are not final completion status."
+  ],
+  "releaseChecks": {
+    "goVersion": "go version go1.26.2 darwin/arm64",
+    "tests": {
+      "command": "CGO_ENABLED=0 go test -mod=readonly -json ./...",
+      "platform": "darwin/arm64",
+      "passedTestEvents": 963,
+      "failedEvents": 0,
+      "skippedTestEvents": 0,
+      "exitCode": 0
+    },
+    "builds": [
+      {
+        "goos": "linux",
+        "goarch": "amd64",
+        "cgo_enabled": 0,
+        "command": "go build -mod=readonly ./...",
+        "exit_code": 0
+      },
+      {
+        "goos": "windows",
+        "goarch": "amd64",
+        "cgo_enabled": 0,
+        "command": "go build -mod=readonly ./...",
+        "exit_code": 0
+      },
+      {
+        "goos": "darwin",
+        "goarch": "arm64",
+        "cgo_enabled": 0,
+        "command": "go build -mod=readonly ./...",
+        "exit_code": 0
+      }
+    ],
+    "crossPlatformRuntimeTestsPerformed": false,
+    "liveProviderSmokePerformedForThisRelease": false
+  },
+  "usage": {
+    "source": "https://platform.deepseek.com/usage",
+    "dateRange": ["2026-09-28", "2026-09-29"],
+    "timezone": "GMT+7",
+    "apiKeyFilter": "All",
+    "modelShown": "deepseek-flash",
+    "costCNY": "30.59",
+    "requests": 2543,
+    "tokens": 345687190,
+    "scope": "Account-wide usage for the selected dates; not an independently isolated migration invoice.",
+    "screenshot": "deepseek-usage-2026-09-28-29.png",
+    "screenshotSha256": "9d0ede344e21685c949b1e7a32d11effdedd4db5851bbf7009d5f86093425e25",
+    "captureNotes": "Cropped browser screenshot; balance, profile, and unrelated lifetime total excluded. No chart values altered. Dashboard states data can lag by up to five minutes."
+  }
+}

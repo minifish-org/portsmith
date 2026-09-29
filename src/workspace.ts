@@ -38,6 +38,7 @@ export type PortTask = {
   seedFiles?: { name: string; sha256: string }[];
   requiredJudgeTests?: string[];
   race?: boolean;
+  moduleTask?: boolean;
 };
 export const EVENT_GOAL = `移植通用 EventStream 和 FIFO 队列，package port。暂不移植 AssistantMessageEventStream。
 公开接口：type StreamItem[T any] struct { Value T; Done bool }
@@ -67,21 +68,19 @@ export async function prepareTask(o: {
   contract?: string;
   requiredJudgeTests?: string[];
   race?: boolean;
+  moduleTask?: boolean;
+  initial?: { name: string; data: Buffer }[];
 }) {
   const source = await realpath(o.source);
   const names = [...new Set([...o.files, "LICENSE"])];
-  if (!o.goal.trim() || !o.files.length || names.length > 80)
-    throw new Error("需要任务说明和参考文件，最多80个文件，请按行为拆分");
+  if (!o.goal.trim() || !o.files.length)
+    throw new Error("需要任务说明和参考文件");
   const refs = [];
   for (const name of names) {
     const file = await checkedFile(source, name);
-    if ((await lstat(file)).size > 512 * 1024)
-      throw new Error(`文件太大：${name}`);
     const data = await readFile(file);
     refs.push({ name, data });
   }
-  if (refs.reduce((n, f) => n + f.data.length, 0) > 2 * 1024 * 1024)
-    throw new Error("参考快照超过2MiB，请拆小任务");
   const rules = o.rules ? await readFile(o.rules, "utf8") : DEFAULT_RULES;
   const mod = o.goMod
     ? await readFile(o.goMod, "utf8")
@@ -93,12 +92,21 @@ export async function prepareTask(o: {
   const sum = o.goSum ? await readFile(o.goSum) : undefined;
   const judge =
     o.judgeFiles ??
-    (o.judge ? await snapshotFiles(await realpath(o.judge), 100) : []);
+    (o.judge ? await snapshotFiles(await realpath(o.judge)) : []);
   if (o.writableFiles) for (const name of o.writableFiles) relativeName(name);
   for (const file of o.seed ?? []) {
     relativeName(file.name);
     if (o.writableFiles?.includes(file.name))
       throw new Error("前置文件不能同时可写");
+  }
+  for (const f of o.initial ?? []) {
+    relativeName(f.name);
+    if (
+      !o.moduleTask ||
+      !o.writableFiles?.includes(f.name) ||
+      o.seed?.some((s) => s.name === f.name)
+    )
+      throw new Error("模块初始文件必须属于可写清单且不覆盖前置代码");
   }
   if (o.example && judge.length)
     throw new Error("内置验证器和自定义judge二选一");
@@ -127,6 +135,8 @@ export async function prepareTask(o: {
   );
   if (judge.length) await copyFiles(path.join(root, "judge"), judge);
   if (o.seed?.length) await copyFiles(path.join(root, "candidate"), o.seed);
+  if (o.initial?.length)
+    await copyFiles(path.join(root, "candidate"), o.initial);
   const task: PortTask = {
     version: 1,
     revision: o.revision,
@@ -149,6 +159,7 @@ export async function prepareTask(o: {
     seedFiles: o.seed?.map(({ name, data }) => ({ name, sha256: hash(data) })),
     requiredJudgeTests: o.requiredJudgeTests,
     race: o.race,
+    moduleTask: o.moduleTask,
   };
   await atomicJson(path.join(root, "task.json"), task);
   return root;
@@ -160,7 +171,6 @@ export async function loadTask(rootInput: string) {
     task.version !== 1 ||
     typeof task.goal !== "string" ||
     !Array.isArray(task.files) ||
-    task.files.length > 80 ||
     !task.rulesSha256 ||
     !Array.isArray(task.judgeFiles) ||
     (task.example && task.example !== "event-stream")
@@ -202,8 +212,15 @@ export async function writeCandidate(
   content: string,
 ) {
   relativeName(name);
+  const { task } = await loadTask(root);
+  const allowedAsset =
+    task.moduleTask &&
+    task.writableFiles?.includes(name) &&
+    /\.(json|txt|md|yaml|yml|csv)$/.test(name);
   if (
-    (!/^[a-z0-9_/-]+\.go$/.test(name) && name !== "NOTES.md") ||
+    (!/^[a-z0-9_/-]+\.go$/.test(name) &&
+      name !== "NOTES.md" &&
+      !allowedAsset) ||
     name
       .split("/")
       .some(
@@ -211,9 +228,11 @@ export async function writeCandidate(
       )
   )
     throw new Error("只能写候选Go文件或NOTES.md，不能修改独立验证器");
-  if (Buffer.byteLength(content) > 256 * 1024)
-    throw new Error("单文件过大，请拆分");
-  const { task } = await loadTask(root);
+  if (
+    ["go.mod", "go.sum", "LICENSE"].includes(name) ||
+    name.split("/").some((p) => p.startsWith("."))
+  )
+    throw new Error("不能写依赖、许可证或隐藏文件");
   if (task.writableFiles && !task.writableFiles.includes(name))
     throw new Error(`不在当前任务可写清单：${name}`);
   if (task.seedFiles?.some((f) => f.name === name))
@@ -241,8 +260,6 @@ export async function writeCandidate(
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
-  if ((await candidateFiles(root)).length >= 200)
-    throw new Error("候选文件过多");
   const temp = path.join(root, `.candidate-${randomUUID()}.tmp`);
   await writeFile(temp, content, { flag: "wx", mode: 0o600 });
   try {

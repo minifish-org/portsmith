@@ -14,7 +14,7 @@ import {
 } from "./process.js";
 
 // Bump when validation behavior changes: old receipts must not validate a new verifier.
-export const VERIFIER_VERSION = "portsmith-go-v2";
+export const VERIFIER_VERSION = "portsmith-go-v3";
 export type Verification = {
   version: 1;
   verifier: string;
@@ -31,7 +31,7 @@ export type Verification = {
   fullParityProven: false;
   phases: { name: string; result: ProcessResult }[];
 };
-async function golden(root: string) {
+async function golden(root: string, signal?: AbortSignal) {
   const ext = import.meta.url.endsWith(".ts") ? "ts" : "js";
   const worker = fileURLToPath(
     new URL(`./oracle-worker.${ext}`, import.meta.url),
@@ -40,7 +40,11 @@ async function golden(root: string) {
     process.execPath,
     ["--import", import.meta.resolve("tsx"), worker, root],
     root,
-    15000,
+    0,
+    false,
+    false,
+    undefined,
+    signal,
   );
   if (!succeeded(run)) throw new Error(`TS参考执行失败或超时：${run.log}`);
   const result = JSON.parse(run.log);
@@ -71,13 +75,13 @@ func(s *EventStream[T,R])End(*R){}
 func(s *EventStream[T,R])Next()<-chan StreamItem[T]{ch:=make(chan StreamItem[T],1);ch<-StreamItem[T]{Done:true};return ch}
 func(s *EventStream[T,R])Result(context.Context)(R,error){var r R;return r,nil}
 `;
-export async function judgeCheck(rootInput: string) {
+export async function judgeCheck(rootInput: string, signal?: AbortSignal) {
   const { root, task } = await loadTask(rootInput);
   if (task.example !== "event-stream")
     throw new Error(
       "judge-check当前内置EventStream基线；自定义judge需自行证明基线和变异检测",
     );
-  const data = await golden(root);
+  const data = await golden(root, signal);
   const baseline = [
     [
       { result: 3 },
@@ -121,10 +125,16 @@ export async function judgeCheck(rootInput: string) {
     );
     await writeFile(path.join(temp, "broken.go"), broken);
     await injectOracle(temp, data);
-    const build = await executeGo(temp, ["-run", "^$"]);
+    const build = await executeGo(temp, ["-run", "^$"], false, false, signal);
     if (!succeeded(build))
       throw new Error(`故障样本未能编译，不能用它检验judge：${build.log}`);
-    const run = await executeGo(temp, ["-run", "^TestPortsmithJudge"]);
+    const run = await executeGo(
+      temp,
+      ["-run", "^TestPortsmithJudge"],
+      false,
+      false,
+      signal,
+    );
     const caught = testResults(run, "TestPortsmithJudge").failed;
     if (run.code === 0 || run.timedOut || run.truncated || caught < 1)
       throw new Error("judge未抓住已知错误，不能信任它");
@@ -148,8 +158,32 @@ export async function judgeCheck(rootInput: string) {
 export async function verifyPort(
   rootInput: string,
   download = false,
+  signal?: AbortSignal,
 ): Promise<Verification> {
+  signal?.throwIfAborted();
   const { root, task } = await loadTask(rootInput);
+  // Normalize only writable candidate Go files; frozen seeds and judges are immutable.
+  const writableGo = (await candidateFiles(root))
+    .filter(
+      (f) =>
+        f.name.endsWith(".go") &&
+        !task.seedFiles?.some((s) => s.name === f.name),
+    )
+    .map((f) => "./" + f.name);
+  if (writableGo.length) {
+    const formatted = await execute(
+      "gofmt",
+      ["-w", ...writableGo],
+      path.join(root, "candidate"),
+      0,
+      download,
+      false,
+      undefined,
+      signal,
+    );
+    if (!succeeded(formatted))
+      throw Error(`Go 格式/语法检查失败：${formatted.log}`);
+  }
   const before = await fingerprint(root);
   const files = await candidateFiles(root);
   if (
@@ -183,11 +217,30 @@ export async function verifyPort(
       )
         throw new Error("候选与独立验证器路径或保留测试名前缀冲突");
     await copyFiles(temp, files);
-    const build = await executeGo(temp, ["-run", "^$"], download);
+    const build = await executeGo(
+      temp,
+      ["-run", "^$"],
+      download,
+      false,
+      signal,
+    );
     report.phases.push({ name: "compile", result: build });
-    if (succeeded(build)) {
+    const vet = succeeded(build)
+      ? await execute(
+          "go",
+          ["vet", "-mod=readonly", "./..."],
+          temp,
+          0,
+          download,
+          false,
+          undefined,
+          signal,
+        )
+      : undefined;
+    if (vet) report.phases.push({ name: "vet", result: vet });
+    if (succeeded(build) && vet && succeeded(vet)) {
       report.status = "tests_failed";
-      const tests = await executeGo(temp, [], download);
+      const tests = await executeGo(temp, [], download, false, signal);
       report.phases.push({ name: "candidate-tests", result: tests });
       const counts = testResults(tests);
       if (succeeded(tests) && counts.passed > 0 && counts.skipped === 0) {
@@ -195,8 +248,8 @@ export async function verifyPort(
         if (task.example || task.judgeFiles.length) {
           report.status = "behavior_failed";
           if (task.example) {
-            await judgeCheck(root);
-            const data = await golden(root);
+            await judgeCheck(root, signal);
+            const data = await golden(root, signal);
             report.oracleCases = data.length;
             await injectOracle(temp, data);
             await atomicJson(path.join(root, "oracle.json"), data);
@@ -212,6 +265,8 @@ export async function verifyPort(
             temp,
             ["-run", "^TestPortsmithJudge"],
             download,
+            false,
+            signal,
           );
           report.phases.push({ name: "independent-behavior", result: judge });
           const jc = testResults(judge, "TestPortsmithJudge");
@@ -231,6 +286,7 @@ export async function verifyPort(
                 ["-run", "^TestPortsmithJudge"],
                 download,
                 true,
+                signal,
               );
               report.phases.push({ name: "race", result: race });
               const rc = testResults(race, "TestPortsmithJudge");
@@ -247,6 +303,7 @@ export async function verifyPort(
         }
       }
     }
+    signal?.throwIfAborted();
     if ((await fingerprint(root)) !== before)
       throw new Error("验证过程中代码发生变化，报告作废，请重试");
     await atomicJson(path.join(root, "verification.json"), report);
