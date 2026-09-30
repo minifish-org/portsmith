@@ -140,10 +140,10 @@ test("plan requires acceptance and detects source/config drift", async (t) => {
   await atomicJson(path.join(root, "plan.json"), plan);
   await selectUnit(root, "root");
   await put("main.ts", "export const answer=43;");
-  await assert.rejects(selectUnit(root, "root"), /源码/);
+  await assert.rejects(selectUnit(root, "root"), /Source/);
   await put("main.ts", "export const answer=42;");
   await put("tsconfig.json", '{"compilerOptions":{}}');
-  await assert.rejects(selectUnit(root, "root"), /配置/);
+  await assert.rejects(selectUnit(root, "root"), /Configuration/);
 });
 test("locking prevents concurrent mutation and releases on failure", async (t) => {
   const { dir } = await fixture(t);
@@ -151,7 +151,7 @@ test("locking prevents concurrent mutation and releases on failure", async (t) =
     withLock(dir, async () => {
       await assert.rejects(
         withLock(dir, async () => {}),
-        /正在运行/,
+        /already running/,
       );
       throw Error("deliberate");
     }),
@@ -181,12 +181,15 @@ test("precise edits preserve the file and reject ambiguous matches, fragments an
   );
   await assert.rejects(
     editCandidate(root, "unit.go", " ", "x"),
-    /精确出现一次/,
+    /exactly once/,
   );
-  await assert.rejects(editCandidate(root, "go.mod", "1.24", "1.25"), /只能写/);
+  await assert.rejects(
+    editCandidate(root, "go.mod", "1.24", "1.25"),
+    /Only candidate/,
+  );
   await assert.rejects(
     writeCandidate(root, "unit.go", "const Answer=99\n"),
-    /完整文件/,
+    /complete file/,
   );
 });
 test("plan edits invalidate previous task associations and keep dependents blocked", async (t) => {
@@ -261,7 +264,7 @@ test("process runner enforces timeouts without passing provider credentials", as
         controller.signal,
       )
     ).log,
-    "操作已取消",
+    "Operation cancelled",
   );
 });
 test(
@@ -292,7 +295,7 @@ test(
     );
     await assert.rejects(
       writeCandidate(root, "judge_test.go", "bad"),
-      /独立验证器/,
+      /independent verifier/,
     );
     assert.equal((await verifyPort(root)).status, "behavior_verified");
     const out = path.join(dir, "accepted");
@@ -305,11 +308,11 @@ test(
     assert.equal((await taskStatus(root)).state, "stale_verification");
     await assert.rejects(
       acceptTask(root, path.join(dir, "bad-export")),
-      /独立行为验证/,
+      /independent behavior verification/,
     );
     assert.equal((await verifyPort(root)).status, "behavior_failed");
     await writeFile(path.join(root, "judge/judge_test.go"), "tampered");
-    await assert.rejects(loadTask(root), /judge发生变化/);
+    await assert.rejects(loadTask(root), /Judge changed/);
   },
 );
 test(
@@ -334,7 +337,7 @@ test(
     assert.equal((await verifyPort(root)).status, "tests_passed");
     await assert.rejects(
       acceptTask(root, path.join(dir, "out")),
-      /独立行为验证/,
+      /independent behavior verification/,
     );
     const judge = path.join(dir, "judge");
     await mkdir(judge);
@@ -381,7 +384,7 @@ test(
       "pretend_test.go",
       'package port\nimport "testing"\nfunc TestPortsmithJudgePretend(t *testing.T){}\n',
     );
-    await assert.rejects(verifyPort(third), /保留测试名前缀/);
+    await assert.rejects(verifyPort(third), /reserved test prefix/);
   },
 );
 test("approved dependency manifests are frozen and local replacements are rejected", async (t) => {
@@ -405,7 +408,7 @@ test("approved dependency manifests are frozen and local replacements are reject
   });
   await loadTask(root);
   await writeFile(path.join(root, "candidate/go.mod"), "module changed\n");
-  await assert.rejects(loadTask(root), /冻结配置/);
+  await assert.rejects(loadTask(root), /Frozen configuration/);
   await writeFile(
     mod,
     "module example.com/test\nreplace example.com/secret => ../secret\n",
@@ -419,7 +422,7 @@ test("approved dependency manifests are frozen and local replacements are reject
       goal: "x",
       goMod: mod,
     }),
-    /本地 replace/,
+    /local replace/,
   );
 });
 

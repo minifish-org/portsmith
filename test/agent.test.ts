@@ -62,7 +62,7 @@ test("port freezes references and rejects changed snapshots", async (t) => {
     /42/,
   );
   await writeFile(path.join(root, "references/unit.ts"), "changed snapshot\n");
-  await assert.rejects(loadTask(root), /快照发生变化/);
+  await assert.rejects(loadTask(root), /snapshot changed/);
 });
 
 test("port rejects traversal, symlinks, and writes to control files", async (t) => {
@@ -76,7 +76,7 @@ test("port rejects traversal, symlinks, and writes to control files", async (t) 
       goal: "x",
       revision: "x",
     }),
-    /符号链接/,
+    /Symbolic links/,
   );
   for (const name of [
     "../unit.go",
@@ -221,7 +221,7 @@ test(
           });
           chunk({}, "tool_calls");
         } else {
-          chunk({ content: "候选生成，尚未验证。" });
+          chunk({ content: "Candidate generated, not yet verified." });
           chunk({}, "stop");
         }
         response.end("data: [DONE]\n\n");
@@ -280,7 +280,7 @@ test(
     assert.match(initial, /FAIL fixture\/telemetry/);
     assert.match(initial, /plain-vet-diagnostic/);
     assert.doesNotMatch(initial, /passedpassed/);
-    assert.doesNotMatch(initial, /工具不提供命令执行/);
+    assert.doesNotMatch(initial, /tools do not provide command execution/);
     assert.match(initial, /fixture-skill-discovery-marker/);
     assert.deepEqual(
       requests[0].tools.map((t: any) => t.function.name).sort(),
@@ -507,7 +507,7 @@ for (const scenario of [
       signal: controller.signal,
       onProgress: (line) => {
         progress.push(line);
-        if (scenario === "cancel" && line.includes("保留上下文"))
+        if (scenario === "cancel" && line.includes("preserved context"))
           controller.abort();
       },
     });
@@ -519,7 +519,7 @@ for (const scenario of [
       assert.equal(requests.length, 3);
       assert.match(
         JSON.stringify(requests[1].messages),
-        /上一条回复达到输出限制/,
+        /previous response reached the output limit/,
       );
       if (scenario === "resume-text")
         assert.match(

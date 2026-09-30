@@ -79,7 +79,8 @@ export async function main(args = process.argv.slice(2)) {
   }
   const req = (name: keyof typeof v) => {
     const value = v[name];
-    if (typeof value !== "string" || !value) throw new Error(`缺少--${name}`);
+    if (typeof value !== "string" || !value)
+      throw new Error(`Missing --${name}`);
     return value;
   };
   if (command === "migrate") {
@@ -93,7 +94,7 @@ export async function main(args = process.argv.slice(2)) {
       timeout * 1000 > 2147483647
     )
       throw Error(
-        "max-turns必须为非负整数；timeout必须为0–2147483秒；0表示不限制",
+        "max-turns must be a non-negative integer; timeout must be 0–2147483 seconds; 0 means unlimited",
       );
     const controller = new AbortController();
     const cancel = () => controller.abort();
@@ -115,7 +116,7 @@ export async function main(args = process.argv.slice(2)) {
             loadLocalEnv(v["env-file"]);
             connection = await configuredModel();
             console.log(
-              `模型：${connection.model.id}；单次输出上限：${connection.model.maxTokens} tokens；工作上下文：${connection.model.contextWindow} tokens`,
+              `Model: ${connection.model.id}; maximum output: ${connection.model.maxTokens} tokens; working context: ${connection.model.contextWindow} tokens`,
             );
           }
           return runPort({
@@ -163,13 +164,13 @@ export async function main(args = process.argv.slice(2)) {
   if (command === "plan") {
     const plan = await createPlan(req("analysis"), req("out"), req("revision"));
     console.log(
-      `已生成${plan.units.length}个草稿任务，${plan.packageCycles.length}个包循环。请编辑plan.json的goal、targetPackage、acceptance和依赖。`,
+      `Generated ${plan.units.length} draft tasks and found ${plan.packageCycles.length} package cycles. Review goal, targetPackage, acceptance and dependencies in plan.json.`,
     );
     return;
   }
   if (command === "prepare") {
     if (v.example && v.example !== "event-stream")
-      throw new Error("内置示例只有event-stream");
+      throw new Error("The only built-in example is event-stream");
     const common = {
       out: req("out"),
       rules: v.rules,
@@ -187,9 +188,9 @@ export async function main(args = process.argv.slice(2)) {
         files: [...unit.files, ...unit.references],
         goal:
           unit.goal +
-          "\n验收：\n" +
+          "\nAcceptance:\n" +
           unit.acceptance.join("\n") +
-          "\nGo目标包：" +
+          "\nTarget Go package: " +
           unit.targetPackage,
         rules: v.rules ?? path.join(v.plan, "RULEBOOK.md"),
         unit: unit.id,
@@ -212,7 +213,7 @@ export async function main(args = process.argv.slice(2)) {
         example,
       });
     }
-    console.log(`任务快照已创建：${root}`);
+    console.log(`Task snapshot created: ${root}`);
     return;
   }
   if (command === "status" || command === "next") {
@@ -246,23 +247,23 @@ export async function main(args = process.argv.slice(2)) {
       const report = await verifyPort(root, v["allow-download"]);
       for (const phase of report.phases) {
         console.log(
-          `${phase.name}: ${phase.result.code === 0 ? "通过" : "失败"}`,
+          `${phase.name}: ${phase.result.code === 0 ? "passed" : "failed"}`,
         );
         if (phase.result.code !== 0)
           console.log(phase.result.log.slice(-12000));
       }
       console.log(
-        `${report.status} · ${report.oracleCases}个内置对照场景；不是完整兼容证明`,
+        `${report.status} · ${report.oracleCases} built-in oracle cases; not proof of full parity`,
       );
       if (!["tests_passed", "behavior_verified"].includes(report.status))
         process.exitCode = 1;
       return;
     }
     if (command === "accept") {
-      console.log(`已导出：${await acceptTask(root, req("out"))}`);
+      console.log(`Exported: ${await acceptTask(root, req("out"))}`);
       return;
     }
-    if (command !== "run") throw new Error(`未知命令：${command}`);
+    if (command !== "run") throw new Error(`Unknown command: ${command}`);
     const maxTurns = Number(v["max-turns"]),
       timeout = Number(v.timeout);
     if (
@@ -273,7 +274,7 @@ export async function main(args = process.argv.slice(2)) {
       timeout * 1000 > 2147483647
     )
       throw new Error(
-        "max-turns必须为非负整数；timeout必须为0–2147483秒；0表示不限制",
+        "max-turns must be a non-negative integer; timeout must be 0–2147483 seconds; 0 means unlimited",
       );
     const feedback = v.feedback
       ? await readFile(v.feedback, "utf8")
@@ -286,7 +287,7 @@ export async function main(args = process.argv.slice(2)) {
     process.once("SIGTERM", cancel);
     try {
       console.log(
-        `模型：${model.id}，${maxTurns ? `最多${maxTurns}轮` : "不限制轮数"}`,
+        `Model: ${model.id}; ${maxTurns ? `maximum ${maxTurns} turns` : "unlimited turns"}`,
       );
       const report = await runPort({
         root,
@@ -300,7 +301,7 @@ export async function main(args = process.argv.slice(2)) {
         feedback,
       });
       console.log(
-        `${report.text ?? ""}\n${report.status} · ${report.turns}轮；会话已保存，正式接受仍以独立验收为准。`,
+        `${report.text ?? ""}\n${report.status} · ${report.turns} turns; session saved. Acceptance still requires independent verification.`,
       );
       if (report.status !== "candidate_ready") process.exitCode = 1;
     } finally {

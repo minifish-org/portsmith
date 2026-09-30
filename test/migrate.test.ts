@@ -87,7 +87,7 @@ async function fixture(t: { after: (f: () => Promise<void>) => void }) {
           "alpha/value.go",
           "package alpha\nconst Value=99\n",
         ),
-        /可写|前置/,
+        /writable|seed/,
       );
       assert.match(
         await readFile(path.join(root, "candidate/alpha/value.go"), "utf8"),
@@ -189,7 +189,7 @@ test(
         commit: true,
         generate: (root) => f.generate(root),
       }),
-      /以下修改/,
+      /resolve these changes/,
     );
     assert.equal(await f.git("rev-list", "--count", "HEAD"), "1");
     await rm(path.join(f.project, "personal.txt"));
@@ -204,7 +204,7 @@ test(
           return f.generate(root, 41);
         },
       }),
-      /上限/,
+      /limit/,
     );
     assert.equal(calls, 2);
     assert.equal(await f.git("rev-list", "--count", "HEAD"), "2");
@@ -225,7 +225,7 @@ test(
           throw Error("must preflight");
         },
       }),
-      /独立测试缺失/,
+      /Missing independent tests/,
     );
   },
 );
@@ -246,7 +246,7 @@ test(
           return { status: "cancelled" };
         },
       }),
-      /取消/,
+      /cancelled/,
     );
     const hook = path.join(f.project, ".git/hooks/pre-commit");
     await assert.rejects(
@@ -280,7 +280,7 @@ test(
         commit: true,
         generate: (root) => f.generate(root),
       }),
-      /拒绝覆盖/,
+      /refuses to overwrite/,
     );
     await f.put(path.join(f.project, "alpha/value.go"), installed);
     const resumed = await migrate({

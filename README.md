@@ -4,7 +4,7 @@ An inspectable, resumable TypeScript-to-Go migration workbench powered by the Pi
 
 **Status: experimental.** Portsmith executed the first planned migration of Pi's AI, agent core, and built-in tools into [Pith](https://github.com/minifish-org/pith): 26 accepted steps across three module commits. Passing the recorded tests is evidence for the selected contracts, not proof of complete upstream equivalence.
 
-[English guide](docs/guide.md) · [Migration evidence](docs/evidence/pith-2026-09-29.json) · [中文文档](README.zh-CN.md)
+[English guide](docs/guide.md) · [Migration evidence](docs/evidence/pith-2026-09-29.json) · [User manual](docs/user-manual.md)
 
 ## What it does
 

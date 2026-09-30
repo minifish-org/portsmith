@@ -38,13 +38,14 @@ export function verificationDiagnostics(
   );
   const phases = failed.length ? failed : report.phases.slice(-1);
   const text = [
-    `验证状态：${report.status}`,
+    `Verification status: ${report.status}`,
     ...phases.map(
       ({ name, result }) =>
-        `${name}（退出码 ${result.code}${result.timedOut ? "，超时" : ""}${result.truncated ? "，原始输出被截断" : ""}）：\n${processDiagnostics(result.log)}`,
+        `${name} (exit code ${result.code}${result.timedOut ? ", timed out" : ""}${result.truncated ? ", raw output truncated" : ""}):\n${processDiagnostics(result.log)}`,
     ),
   ].join("\n");
-  const marker = "\n[诊断摘要已截断，完整输出见 verification.json]";
+  const marker =
+    "\n[Diagnostic summary truncated; see verification.json for full output]";
   return text.length <= maxChars
     ? text
     : text.slice(0, Math.max(0, maxChars - marker.length)) + marker;

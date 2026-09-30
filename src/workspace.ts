@@ -40,13 +40,13 @@ export type PortTask = {
   race?: boolean;
   moduleTask?: boolean;
 };
-export const EVENT_GOAL = `移植通用 EventStream 和 FIFO 队列，package port。暂不移植 AssistantMessageEventStream。
-公开接口：type StreamItem[T any] struct { Value T; Done bool }
+export const EVENT_GOAL = `Port the generic EventStream and FIFO queue into package port. AssistantMessageEventStream is out of scope.
+Public interface: type StreamItem[T any] struct { Value T; Done bool }
 NewEventStream[T any,R any](isComplete func(T)bool, extractResult func(T)R)*EventStream[T,R]
 Push(T); Next() <-chan StreamItem[T]; End(*R); Result(context.Context)(R,error)
-Next同步登记消费者，返回容量1的通道。FIFO，不广播，完成事件仍可消费；完成后忽略Push；End后排空旧事件。
-第一次结果生效。End(nil)唤醒消费者但不解析Result。Result支持取消，方法并发安全。
-读全部参考源码和测试。生成event_stream.go、*_test.go和NOTES.md，说明接口映射、差异和限制。保留许可证。`;
+Next registers a consumer synchronously and returns a channel buffered to one item. Use FIFO, not broadcast. Completion events remain consumable; ignore Push after completion and drain queued events after End.
+The first result wins. End(nil) wakes consumers without resolving Result. Result supports cancellation; methods are concurrency-safe.
+Read all reference source and tests. Generate event_stream.go, *_test.go and NOTES.md documenting interface mappings, differences and limitations. Preserve the license.`;
 
 export async function prepareTask(o: {
   source: string;
@@ -74,7 +74,7 @@ export async function prepareTask(o: {
   const source = await realpath(o.source);
   const names = [...new Set([...o.files, "LICENSE"])];
   if (!o.goal.trim() || !o.files.length)
-    throw new Error("需要任务说明和参考文件");
+    throw new Error("A task goal and reference files are required");
   const refs = [];
   for (const name of names) {
     const file = await checkedFile(source, name);
@@ -87,7 +87,7 @@ export async function prepareTask(o: {
     : "module example.com/portsmith-candidate\n\ngo 1.24\n";
   if (/(?:=>\s*)["']?(?:\.\.?\/|\/|[A-Za-z]:)/.test(mod))
     throw new Error(
-      "独立候选不支持本地 replace；请用已发布依赖或把必要Go源码作为候选的一部分",
+      "Isolated candidates do not support local replace directives; use published dependencies or include the required Go source in the candidate",
     );
   const sum = o.goSum ? await readFile(o.goSum) : undefined;
   const judge =
@@ -97,7 +97,7 @@ export async function prepareTask(o: {
   for (const file of o.seed ?? []) {
     relativeName(file.name);
     if (o.writableFiles?.includes(file.name))
-      throw new Error("前置文件不能同时可写");
+      throw new Error("Seed files cannot also be writable");
   }
   for (const f of o.initial ?? []) {
     relativeName(f.name);
@@ -106,21 +106,25 @@ export async function prepareTask(o: {
       !o.writableFiles?.includes(f.name) ||
       o.seed?.some((s) => s.name === f.name)
     )
-      throw new Error("模块初始文件必须属于可写清单且不覆盖前置代码");
+      throw new Error(
+        "Initial module files must be in the writable manifest and must not overwrite seed code",
+      );
   }
   if (o.example && judge.length)
-    throw new Error("内置验证器和自定义judge二选一");
+    throw new Error("Choose either the built-in verifier or a custom judge");
   if (
     (o.judge || o.judgeFiles) &&
     !judge.some((f) => f.name.endsWith("_test.go"))
   )
-    throw new Error("judge需要独立Go测试，测试名以TestPortsmithJudge开头");
+    throw new Error(
+      "A judge requires independent Go tests with names starting with TestPortsmithJudge",
+    );
   if (
     judge.some(
       (f) => f.name === "go.mod" || f.name === "go.sum" || f.name === "LICENSE",
     )
   )
-    throw new Error("judge不能覆盖依赖或许可证");
+    throw new Error("Judges cannot overwrite dependencies or licenses");
   const root = path.resolve(o.out);
   await mkdir(path.dirname(root), { recursive: true });
   await mkdir(root);
@@ -141,7 +145,10 @@ export async function prepareTask(o: {
     version: 1,
     revision: o.revision,
     goal:
-      o.goal + (o.contract ? `\n固定Go接口与验收约定：\n${o.contract}` : ""),
+      o.goal +
+      (o.contract
+        ? `\nFrozen Go interface and acceptance contract:\n${o.contract}`
+        : ""),
     example: o.example,
     unit: o.unit,
     planDigest: o.planDigest,
@@ -175,13 +182,13 @@ export async function loadTask(rootInput: string) {
     !Array.isArray(task.judgeFiles) ||
     (task.example && task.example !== "event-stream")
   )
-    throw new Error("无效任务；旧原型任务需要重新prepare");
+    throw new Error("Invalid task; prepare legacy prototype tasks again");
   for (const f of task.files) {
     const data = await readFile(
       await checkedFile(root, `references/${f.path}`),
     );
     if (data.length !== f.bytes || hash(data) !== f.sha256)
-      throw new Error(`参考快照发生变化：${f.path}`);
+      throw new Error(`Reference snapshot changed: ${f.path}`);
   }
   for (const [name, digest] of [
     ["RULEBOOK.md", task.rulesSha256],
@@ -189,21 +196,23 @@ export async function loadTask(rootInput: string) {
     ...(task.goSumSha256 ? [["candidate/go.sum", task.goSumSha256]] : []),
   ])
     if (hash(await readFile(await checkedFile(root, name))) !== digest)
-      throw new Error(`冻结配置发生变化：${name}；请重新prepare`);
+      throw new Error(
+        `Frozen configuration changed: ${name}; prepare the task again`,
+      );
   for (const f of task.judgeFiles)
     if (
       hash(await readFile(await checkedFile(root, `judge/${f.name}`))) !==
       f.sha256
     )
-      throw new Error(`judge发生变化：${f.name}`);
+      throw new Error(`Judge changed: ${f.name}`);
   for (const f of task.seedFiles ?? [])
     if (
       hash(await readFile(await checkedFile(root, `candidate/${f.name}`))) !==
       f.sha256
     )
-      throw new Error(`前置代码发生变化：${f.name}`);
+      throw new Error(`Seed code changed: ${f.name}`);
   if ((await lstat(path.join(root, "candidate"))).isSymbolicLink())
-    throw new Error("候选目录不能是符号链接");
+    throw new Error("Candidate directory cannot be a symbolic link");
   return { root, task };
 }
 export async function writeCandidate(
@@ -227,36 +236,39 @@ export async function writeCandidate(
         (p) => p.startsWith("port_oracle") || p.startsWith("portsmith_judge"),
       )
   )
-    throw new Error("只能写候选Go文件或NOTES.md，不能修改独立验证器");
+    throw new Error(
+      "Only candidate Go files or NOTES.md may be written; the independent verifier cannot be modified",
+    );
   if (
     ["go.mod", "go.sum", "LICENSE"].includes(name) ||
     name.split("/").some((p) => p.startsWith("."))
   )
-    throw new Error("不能写依赖、许可证或隐藏文件");
+    throw new Error("Cannot write dependencies, licenses or hidden files");
   if (task.writableFiles && !task.writableFiles.includes(name))
-    throw new Error(`不在当前任务可写清单：${name}`);
+    throw new Error(`Not in the current task's writable manifest: ${name}`);
   if (task.seedFiles?.some((f) => f.name === name))
-    throw new Error("不能修改已验收的前置代码");
+    throw new Error("Cannot modify accepted seed code");
   if (task.judgeFiles.some((f) => f.name === name))
-    throw new Error("不能覆盖独立验证器路径");
+    throw new Error("Cannot overwrite an independent verifier path");
   if (
     name.endsWith(".go") &&
     !/^\s*package\s+[A-Za-z_]\w*\s*(?:\r?\n|;)/m.test(content)
   )
     throw new Error(
-      "Go文件必须包含package声明；write_candidate需要完整文件，局部修改请用edit_candidate",
+      "Go files must contain a package declaration; write_candidate requires a complete file. Use edit_candidate for partial changes",
     );
   const candidate = path.join(root, "candidate");
   let dir = candidate;
   for (const part of name.split("/").slice(0, -1)) {
     dir = path.join(dir, part);
     await mkdir(dir, { recursive: true });
-    if ((await lstat(dir)).isSymbolicLink()) throw new Error("不允许符号链接");
+    if ((await lstat(dir)).isSymbolicLink())
+      throw new Error("Symbolic links are not allowed");
   }
   const file = path.join(candidate, name);
   try {
     if ((await lstat(file)).isSymbolicLink() || !(await lstat(file)).isFile())
-      throw new Error("目标不是普通文件");
+      throw new Error("Target is not a regular file");
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
@@ -274,14 +286,16 @@ export async function editCandidate(
   oldText: string,
   newText: string,
 ) {
-  if (!oldText) throw new Error("oldText不能为空");
+  if (!oldText) throw new Error("oldText must not be empty");
   const text = await readFile(
     await checkedFile(path.join(root, "candidate"), name),
     "utf8",
   );
   const index = text.indexOf(oldText);
   if (index < 0 || text.indexOf(oldText, index + 1) >= 0)
-    throw new Error("oldText必须在文件中精确出现一次；先重新读取文件");
+    throw new Error(
+      "oldText must occur exactly once in the file; read the file again first",
+    );
   await writeCandidate(
     root,
     name,
@@ -295,7 +309,9 @@ export async function fingerprint(root: string) {
   const { task } = await loadTask(root);
   const files = await candidateFiles(root);
   if (!task.goSumSha256 && files.some((f) => f.name === "go.sum"))
-    throw new Error("go.sum不在冻结依赖清单中，请重新prepare");
+    throw new Error(
+      "go.sum is not in the frozen dependency manifest; prepare the task again",
+    );
   return hash(
     JSON.stringify({
       task,

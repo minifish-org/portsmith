@@ -82,7 +82,7 @@ export async function analyze(sourceInput: string): Promise<Analysis> {
       const relative = path.posix.join(dir, e.name),
         absolute = path.join(source, relative);
       if (e.isSymbolicLink()) {
-        warnings.push(`跳过符号链接：${relative}`);
+        warnings.push(`Skipped symbolic link: ${relative}`);
         continue;
       }
       if (e.isDirectory()) await walk(relative);
@@ -95,7 +95,7 @@ export async function analyze(sourceInput: string): Promise<Analysis> {
             const pkg = JSON.parse(text);
             if (typeof pkg.name === "string") packages.set(pkg.name, dir);
           } catch {
-            warnings.push(`无法解析：${relative}`);
+            warnings.push(`Unable to parse: ${relative}`);
           }
         }
       }
@@ -126,7 +126,8 @@ export async function analyze(sourceInput: string): Promise<Analysis> {
       };
       if (config) {
         const read = ts.readConfigFile(config, ts.sys.readFile);
-        if (read.error) warnings.push(`配置解析失败：${relative(config)}`);
+        if (read.error)
+          warnings.push(`Configuration parse failed: ${relative(config)}`);
         else {
           const parsed = ts.parseJsonConfigFileContent(
             read.config,

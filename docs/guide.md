@@ -13,7 +13,7 @@ A planner can be a human or an external coding assistant. Portsmith executes a p
 
 ## Commands and files
 
-`analyze` inventories TypeScript; `plan` creates a planning skeleton. The v2 module workflow requires reviewed contracts, tests, output manifests, and dependency decisions. [The existing schema guide](module-workflow.md) and Pith's frozen `migration/workflow.json` document the detailed structure. The schema guide is currently in Chinese.
+`analyze` inventories TypeScript; `plan` creates a planning skeleton. The v2 module workflow requires reviewed contracts, tests, output manifests, and dependency decisions. [The existing schema guide](module-workflow.md) and Pith's frozen `migration/workflow.json` document the detailed structure. The schema guide and runtime messages are in English.
 
 `prepare`, `run`, `verify`, and `accept` expose individual-task operations. `--example event-stream` is an optional tutorial fixture, not the full migration. For a prepared v2 plan, use `migrate` to advance automatically.
 

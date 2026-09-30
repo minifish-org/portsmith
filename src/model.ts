@@ -15,7 +15,7 @@ export function modelLimits(
     const raw = env[name]!.trim(),
       value = Number(raw);
     if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < 1)
-      throw Error(`${name} 必须为正整数`);
+      throw Error(`${name} must be a positive integer`);
     return value;
   };
   const contextWindow = integer(
@@ -28,7 +28,7 @@ export function modelLimits(
   );
   if (contextWindow < 8192 || contextWindow > (known?.contextWindow ?? 2000000))
     throw Error(
-      "PORTSMITH_CONTEXT_WINDOW 必须至少8192且不超过已知模型的上下文容量",
+      "PORTSMITH_CONTEXT_WINDOW must be at least 8192 and within the known model context capacity",
     );
   if (
     maxTokens < 256 ||
@@ -36,7 +36,7 @@ export function modelLimits(
     maxTokens > (known?.maxTokens ?? 393216)
   )
     throw Error(
-      "PORTSMITH_MAX_TOKENS 必须至少256、小于工作上下文且不超过已知模型的输出容量",
+      "PORTSMITH_MAX_TOKENS must be at least 256, below the working context size, and within the known model output capacity",
     );
   return { contextWindow, maxTokens };
 }
@@ -51,7 +51,7 @@ export async function configuredModel() {
   const key = process.env.PORTSMITH_API_KEY ?? process.env.OMNI_API_KEY;
   if (!baseUrl || !id)
     throw new Error(
-      "请设置PORTSMITH_BASE_URL和PORTSMITH_MODEL，或用--env-file读取原OMNI_*配置",
+      "Set PORTSMITH_BASE_URL and PORTSMITH_MODEL, or load existing OMNI_* settings with --env-file",
     );
   const url = new URL(baseUrl);
   if (
@@ -59,9 +59,9 @@ export async function configuredModel() {
     url.username ||
     url.password
   )
-    throw new Error("模型地址必须是无内嵌凭据的HTTP(S)地址");
+    throw new Error("Model URL must use HTTP(S) without embedded credentials");
   const deepseek = url.hostname === "api.deepseek.com";
-  if (deepseek && !key?.trim()) throw new Error("缺少PORTSMITH_API_KEY");
+  if (deepseek && !key?.trim()) throw new Error("Missing PORTSMITH_API_KEY");
   const config = path.resolve(".portsmith/runtime");
   await mkdir(config, { recursive: true, mode: 0o700 });
   const runtime = await ModelRuntime.create({
@@ -100,6 +100,6 @@ export async function configuredModel() {
     ],
   });
   const model = runtime.getModel("portsmith-compatible", id);
-  if (!model) throw new Error("无法初始化模型");
+  if (!model) throw new Error("Unable to initialize model");
   return { runtime, model };
 }

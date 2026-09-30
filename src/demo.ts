@@ -27,7 +27,7 @@ for (const name of ["event_stream.go", "event_stream_test.go", "NOTES.md"])
     name,
     await readFile(path.join(example, "reference-go", name), "utf8"),
   );
-console.log(`离线重放已有示例（没有调用模型）：${root}`);
+console.log(`Replaying the existing example offline (no model calls): ${root}`);
 const report = await verifyPort(root);
 console.log(JSON.stringify(await taskStatus(root), null, 2));
 if (report.status !== "behavior_verified") {

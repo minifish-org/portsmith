@@ -46,10 +46,11 @@ async function golden(root: string, signal?: AbortSignal) {
     undefined,
     signal,
   );
-  if (!succeeded(run)) throw new Error(`TS参考执行失败或超时：${run.log}`);
+  if (!succeeded(run))
+    throw new Error(`TS reference execution failed or timed out: ${run.log}`);
   const result = JSON.parse(run.log);
   if (!Array.isArray(result) || result.length !== 7)
-    throw new Error("TS参考没有生成完整的7个场景");
+    throw new Error("TS reference did not generate all 7 scenarios");
   return result;
 }
 async function injectOracle(temp: string, data: unknown) {
@@ -79,7 +80,7 @@ export async function judgeCheck(rootInput: string, signal?: AbortSignal) {
   const { root, task } = await loadTask(rootInput);
   if (task.example !== "event-stream")
     throw new Error(
-      "judge-check当前内置EventStream基线；自定义judge需自行证明基线和变异检测",
+      "judge-check supports the built-in EventStream baseline; custom judges need their own baseline and mutation evidence",
     );
   const data = await golden(root, signal);
   const baseline = [
@@ -116,7 +117,9 @@ export async function judgeCheck(rootInput: string, signal?: AbortSignal) {
     [{ result: 0 }, { done: true, value: 0 }],
   ];
   if (JSON.stringify(data.map((c) => c.expected)) !== JSON.stringify(baseline))
-    throw new Error("原TS的行为与当前judge基线不一致，需审查judge和源版本");
+    throw new Error(
+      "Original TS behavior differs from the judge baseline; review the judge and source revision",
+    );
   const temp = await mkdtemp(path.join(tmpdir(), "portsmith-judge-"));
   try {
     await writeFile(
@@ -127,7 +130,9 @@ export async function judgeCheck(rootInput: string, signal?: AbortSignal) {
     await injectOracle(temp, data);
     const build = await executeGo(temp, ["-run", "^$"], false, false, signal);
     if (!succeeded(build))
-      throw new Error(`故障样本未能编译，不能用它检验judge：${build.log}`);
+      throw new Error(
+        `Faulty sample did not compile and cannot validate the judge: ${build.log}`,
+      );
     const run = await executeGo(
       temp,
       ["-run", "^TestPortsmithJudge"],
@@ -137,7 +142,9 @@ export async function judgeCheck(rootInput: string, signal?: AbortSignal) {
     );
     const caught = testResults(run, "TestPortsmithJudge").failed;
     if (run.code === 0 || run.timedOut || run.truncated || caught < 1)
-      throw new Error("judge未抓住已知错误，不能信任它");
+      throw new Error(
+        "Judge failed to detect a known defect and cannot be trusted",
+      );
     const report = {
       version: 1,
       verifier: VERIFIER_VERSION,
@@ -182,14 +189,14 @@ export async function verifyPort(
       signal,
     );
     if (!succeeded(formatted))
-      throw Error(`Go 格式/语法检查失败：${formatted.log}`);
+      throw Error(`Go formatting/syntax check failed: ${formatted.log}`);
   }
   const before = await fingerprint(root);
   const files = await candidateFiles(root);
   if (
     !files.some((f) => f.name.endsWith(".go") && !f.name.endsWith("_test.go"))
   )
-    throw new Error("候选目录没有Go实现");
+    throw new Error("Candidate directory contains no Go implementation");
   const temp = await mkdtemp(path.join(tmpdir(), "portsmith-verify-"));
   const report: Verification = {
     version: 1,
@@ -215,7 +222,9 @@ export async function verifyPort(
           ) ||
         task.judgeFiles.some((j) => j.name === f.name)
       )
-        throw new Error("候选与独立验证器路径或保留测试名前缀冲突");
+        throw new Error(
+          "Candidate conflicts with an independent verifier path or reserved test prefix",
+        );
     await copyFiles(temp, files);
     const build = await executeGo(
       temp,
@@ -305,7 +314,9 @@ export async function verifyPort(
     }
     signal?.throwIfAborted();
     if ((await fingerprint(root)) !== before)
-      throw new Error("验证过程中代码发生变化，报告作废，请重试");
+      throw new Error(
+        "Code changed during verification; report invalidated, retry verification",
+      );
     await atomicJson(path.join(root, "verification.json"), report);
     return report;
   } catch (e) {

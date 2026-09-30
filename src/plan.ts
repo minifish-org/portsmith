@@ -65,7 +65,7 @@ export async function createPlan(
   const data = await readFile(analysisFile, "utf8");
   const analysis: Analysis = JSON.parse(data);
   if (analysis.version !== 1 || !analysis.files.length)
-    throw new Error("分析中没有源码");
+    throw new Error("Analysis contains no source files");
   const grouped = new Map<string, Unit>();
   for (const file of analysis.files.filter(
     (f) => !f.test && !/\.d\.[cm]?ts$/.test(f.path),
@@ -76,7 +76,7 @@ export async function createPlan(
     if (!grouped.has(directory))
       grouped.set(directory, {
         id,
-        goal: `移植 ${directory} 的公开行为；请先缩小范围并补充验收场景。`,
+        goal: `Port the public behavior of ${directory}; refine the scope and add acceptance scenarios first.`,
         targetPackage: directory === "." ? "port" : directory,
         files: [],
         references: [],
@@ -93,7 +93,9 @@ export async function createPlan(
   );
   const byId = new Map([...grouped.values()].map((u) => [u.id, u]));
   if (byId.size !== grouped.size)
-    throw new Error("目录规范化后任务名冲突，请缩小分析范围");
+    throw new Error(
+      "Normalized directory names produce conflicting task IDs; narrow the analysis scope",
+    );
   for (const file of analysis.files) {
     const unit = byId.get(owner.get(file.path) ?? "");
     if (!unit) continue;
@@ -104,10 +106,12 @@ export async function createPlan(
         if (dep && dep !== unit.id) unit.dependsOn.push(dep);
       } else if (edge.kind === "unresolved" || edge.kind === "computed")
         unit.notes.push(
-          `需要人工解析 ${file.path}:${edge.line} ${edge.specifier}`,
+          `Manual resolution required: ${file.path}:${edge.line} ${edge.specifier}`,
         );
       else if (edge.kind === "external")
-        unit.notes.push(`外部依赖需决定映射：${edge.specifier}`);
+        unit.notes.push(
+          `External dependency needs a mapping decision: ${edge.specifier}`,
+        );
     }
     for (const test of analysis.files.filter(
       (f) => f.test && f.imports.some((e) => e.target === file.path),
@@ -156,11 +160,11 @@ export async function createPlan(
 export async function loadPlan(root: string) {
   const plan = await readJson<Plan>(root, "plan.json");
   if (plan.version !== 1 || !Array.isArray(plan.units))
-    throw new Error("无效计划");
+    throw new Error("Invalid plan");
   const ids = new Set<string>();
   for (const u of plan.units) {
     if (!/^[a-zA-Z0-9_-]+$/.test(u.id) || ids.has(u.id))
-      throw new Error("任务ID无效或重复");
+      throw new Error("Invalid or duplicate task ID");
     if (
       typeof u.goal !== "string" ||
       !u.goal.trim() ||
@@ -173,12 +177,12 @@ export async function loadPlan(root: string) {
       ) ||
       !u.files.length
     )
-      throw new Error(`任务字段无效：${u.id}`);
+      throw new Error(`Invalid task fields: ${u.id}`);
     ids.add(u.id);
   }
   for (const u of plan.units)
     if (u.dependsOn.some((d) => !ids.has(d) || d === u.id))
-      throw new Error(`任务依赖无效：${u.id}`);
+      throw new Error(`Invalid task dependency: ${u.id}`);
   return plan;
 }
 export async function selectUnit(
@@ -188,12 +192,14 @@ export async function selectUnit(
 ) {
   const plan = await loadPlan(root);
   const unit = plan.units.find((u) => u.id === id);
-  if (!unit) throw new Error(`找不到任务：${id}`);
+  if (!unit) throw new Error(`Task not found: ${id}`);
   if (!unit.acceptance.length)
-    throw new Error("请先在 plan.json 为任务填写 acceptance 验收场景");
+    throw new Error(
+      "Add acceptance scenarios for this task in plan.json first",
+    );
   if (packageCycles(plan.units).length)
     throw new Error(
-      "目标 Go 包存在循环依赖，请先调整 targetPackage 或任务依赖",
+      "Target Go packages contain a dependency cycle; adjust targetPackage or task dependencies",
     );
   if (
     components(
@@ -201,13 +207,15 @@ export async function selectUnit(
       new Map(plan.units.map((u) => [u.id, u.dependsOn])),
     ).some((g) => g.length > 1)
   )
-    throw new Error("任务依赖成环，请合并循环中的任务或先明确接口");
+    throw new Error(
+      "Task dependencies contain a cycle; merge the affected tasks or define their interfaces first",
+    );
   const analysisData = await readFile(
     await checkedFile(root, "analysis.json"),
     "utf8",
   );
   if (hash(analysisData) !== plan.analysisSha256)
-    throw new Error("分析快照发生变化，请重新规划");
+    throw new Error("Analysis snapshot changed; create a revised plan");
   const analysis: Analysis = JSON.parse(analysisData);
   for (const name of [...unit.files, ...unit.references]) {
     const old = analysis.files.find((f) => f.path === name);
@@ -219,7 +227,7 @@ export async function selectUnit(
         ),
       ) !== old.sha256
     )
-      throw new Error(`源码在分析后发生变化：${name}`);
+      throw new Error(`Source changed after analysis: ${name}`);
   }
   for (const c of analysis.configs)
     if (
@@ -229,7 +237,7 @@ export async function selectUnit(
         ),
       ) !== c.sha256
     )
-      throw new Error(`配置在分析后发生变化：${c.path}`);
+      throw new Error(`Configuration changed after analysis: ${c.path}`);
   return { plan, unit, planDigest: await planDigest(root) };
 }
 export async function planDigest(root: string) {

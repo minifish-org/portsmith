@@ -37,7 +37,7 @@ export async function execute(
       timedOut: false,
       truncated: false,
       cancelled: true,
-      log: "操作已取消",
+      log: "Operation cancelled",
     };
   return new Promise((resolve) => {
     const child = spawn(command, args, {

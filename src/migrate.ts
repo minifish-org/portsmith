@@ -83,14 +83,14 @@ export async function dirty(root: string) {
   ]);
   const entries = data.split("\0").filter(Boolean);
   if (entries.some((e) => /^[RC]|^.[RC]/.test(e)))
-    throw Error("请先处理 Git 重命名，再继续迁移");
+    throw Error("Resolve Git renames before continuing the migration");
   return entries.map((e) => e.slice(3));
 }
 export function allows(name: string, roots: string[]) {
   return roots.some((r) => name === r || name.startsWith(r + "/"));
 }
 export async function commit(root: string, names: string[], message: string) {
-  if (!names.length) throw Error("拒绝空提交");
+  if (!names.length) throw Error("Refusing an empty commit");
   await git(root, ["add", "--", ...names]);
   await git(root, ["commit", "--only", "-m", message, "--", ...names]);
   return git(root, ["rev-parse", "HEAD"]);
@@ -98,7 +98,7 @@ export async function commit(root: string, names: string[], message: string) {
 export async function assertFiles(root: string, files: Entry[]) {
   for (const f of files)
     if (hash(await readFile(await checkedFile(root, f.name))) !== f.sha256)
-      throw Error(`已冻结/集成文件发生变化：${f.name}`);
+      throw Error(`Frozen or integrated file changed: ${f.name}`);
 }
 
 export async function inspectMigration(planInput: string) {
@@ -110,11 +110,11 @@ export async function inspectMigration(planInput: string) {
     !Array.isArray(config.bootstrap) ||
     !config.units
   )
-    throw Error("workflow.json 无效");
+    throw Error("Invalid workflow.json");
   const project = await realpath(path.resolve(planRoot, config.project));
   relativeName(config.runs);
   if (!config.runs.startsWith(".portsmith/"))
-    throw Error("任务目录必须在 .portsmith/ 下");
+    throw Error("Task directories must be under .portsmith/");
   for (const p of config.bootstrap) {
     relativeName(p);
     if (
@@ -123,10 +123,10 @@ export async function inspectMigration(planInput: string) {
       p.startsWith(".portsmith") ||
       p.startsWith(".env")
     )
-      throw Error("bootstrap 不允许包含内部状态或凭据");
+      throw Error("bootstrap must not contain internal state or credentials");
   }
   if ((await git(project, ["rev-parse", "--show-toplevel"])) !== project)
-    throw Error("project 必须是目标 Git 仓库根目录");
+    throw Error("project must be the target Git repository root");
   const plan = await loadPlan(planRoot);
   const mod = await readFile(await checkedFile(project, "go.mod"));
   const fixtureMod = await readFile(await checkedFile(planRoot, "go.mod"));
@@ -145,7 +145,7 @@ export async function inspectMigration(planInput: string) {
     await selectUnit(planRoot, unit.id, project);
     const spec = config.units[unit.id];
     if (!spec || !spec.outputs?.length || !spec.tests?.length)
-      throw Error(`缺少任务配置：${unit.id}`);
+      throw Error(`Missing task configuration: ${unit.id}`);
     relativeName(spec.contract);
     relativeName(spec.judge);
     const contract = await readFile(await checkedFile(planRoot, spec.contract));
@@ -159,26 +159,29 @@ export async function inspectMigration(planInput: string) {
         !/^TestPortsmithJudge\w+$/.test(name) ||
         !new RegExp(`func\\s+${name}\\s*\\(`).test(text)
       )
-        throw Error(`独立测试缺失：${unit.id}/${name}`);
+        throw Error(`Missing independent tests: ${unit.id}/${name}`);
     }
     if (new Set(spec.tests).size !== spec.tests.length)
-      throw Error(`重复测试：${unit.id}`);
+      throw Error(`Duplicate test: ${unit.id}`);
     for (const file of [...spec.outputs, ...judge.map((f) => f.name)]) {
       relativeName(file);
       if (!file.endsWith(".go") && !file.includes("/testdata/"))
-        throw Error(`只允许 Go 与 testdata 输出：${file}`);
+        throw Error(`Only Go and testdata outputs are allowed: ${file}`);
       if (!file.startsWith(unit.targetPackage + "/"))
-        throw Error(`输出超出任务包：${file}`);
-      if (owned.has(file)) throw Error(`任务输出或 judge 路径冲突：${file}`);
+        throw Error(`Output is outside the task package: ${file}`);
+      if (owned.has(file))
+        throw Error(`Task output or judge path conflict: ${file}`);
       owned.add(file);
     }
     if (judge.some((f) => spec.outputs.includes(f.name)))
-      throw Error("候选不能覆盖 judge");
+      throw Error("Candidate cannot overwrite a judge");
     if (
       !spec.outputs.some((f) => !f.endsWith("_test.go")) ||
       !spec.outputs.some((f) => f.endsWith("_test.go"))
     )
-      throw Error(`任务需要实现及候选自测：${unit.id}`);
+      throw Error(
+        `Task requires implementation and candidate tests: ${unit.id}`,
+      );
     assets.push(
       { name: spec.contract, data: contract },
       ...judge.map((f) => ({ name: `${spec.judge}/${f.name}`, data: f.data })),
@@ -229,11 +232,11 @@ export async function migrate(options: MigrationOptions) {
         tests: spec.tests.length,
         outputs: spec.outputs,
       })),
-      note: "准备已检查；尚未调用模型，也不表示Go行为已实现",
+      note: "Preparation checked; no model calls made and Go behavior is not yet implemented",
     };
   if (!options.commit)
     throw Error(
-      "自动集成需要 --commit，表示允许准备提交及每模块提交；不会 push",
+      "Automatic integration requires --commit, allowing preparation and per-module commits; it does not push",
     );
   const maxAttempts = options.maxAttempts ?? 0,
     maxUnits = options.maxUnits ?? units.length;
@@ -243,11 +246,15 @@ export async function migrate(options: MigrationOptions) {
     !Number.isInteger(maxUnits) ||
     maxUnits < 1
   )
-    throw Error("max-attempts 应为非负整数（0 不限制），max-units 应为正整数");
+    throw Error(
+      "max-attempts must be non-negative (0 means unlimited); max-units must be positive",
+    );
   const log = options.onProgress ?? (() => {});
   const checkCancel = () => {
     if (options.signal?.aborted)
-      throw Error("迁移已取消；进度保留，重跑同一命令继续");
+      throw Error(
+        "Migration cancelled; progress preserved. Rerun the same command to continue",
+      );
   };
   const control = path.join(project, ".portsmith");
   await mkdir(control, { recursive: true });
@@ -261,13 +268,15 @@ export async function migrate(options: MigrationOptions) {
     else state = { version: 1, digest, completed: [], attempts: {} };
     if (state.version !== 1 || state.digest !== digest)
       throw Error(
-        "计划、接口、测试、依赖或验证器已变更；请审查已有任务，不能沿用旧执行收据",
+        "Plan, interfaces, tests, dependencies or verifier changed; review existing tasks instead of reusing old execution receipts",
       );
     const save = () => atomicJson(journal, state);
     const ensureClean = async () => {
       const names = await dirty(project);
       if (names.length)
-        throw Error(`工作区存在未归入本次事务的修改：${names.join(", ")}`);
+        throw Error(
+          `Working tree contains changes outside this transaction: ${names.join(", ")}`,
+        );
     };
     const recover = async () => {
       const pending = state.pending;
@@ -284,14 +293,16 @@ export async function migrate(options: MigrationOptions) {
           [...pending.files].sort((a, b) => a.name.localeCompare(b.name)),
         )
       )
-        throw Error("集成暂存快照发生变化");
+        throw Error("Integration staging snapshot changed");
       const head = await git(project, ["rev-parse", "HEAD"]);
       let committed: string;
       if (head !== pending.base) {
         const parent = await git(project, ["rev-parse", "HEAD^"]);
         const message = await git(project, ["log", "-1", "--format=%B"]);
         if (parent !== pending.base || message !== pending.message)
-          throw Error("中断后 Git HEAD 已被其他提交改变；保留现场，请人工核对");
+          throw Error(
+            "Git HEAD changed after interruption; state preserved for review",
+          );
         await ensureClean();
         await assertFiles(project, pending.files);
         const changed = (
@@ -310,7 +321,7 @@ export async function migrate(options: MigrationOptions) {
           JSON.stringify(changed) !==
           JSON.stringify(pending.files.map((f) => f.name).sort())
         )
-          throw Error("恢复提交包含预期之外的文件");
+          throw Error("Recovery commit contains unexpected files");
         committed = head;
       } else {
         const allowed = pending.files.map((f) => f.name);
@@ -318,7 +329,9 @@ export async function migrate(options: MigrationOptions) {
           (n) => !allowed.includes(n),
         );
         if (unexpected.length)
-          throw Error(`恢复前请处理其他修改：${unexpected.join(", ")}`);
+          throw Error(
+            `Resolve unrelated changes before resuming: ${unexpected.join(", ")}`,
+          );
         for (const f of staged) {
           const destination = path.join(project, f.name);
           if (await exists(destination)) {
@@ -326,7 +339,9 @@ export async function migrate(options: MigrationOptions) {
               hash(await readFile(await checkedFile(project, f.name))) !==
               f.sha256
             )
-              throw Error(`恢复时发现用户修改，拒绝覆盖：${f.name}`);
+              throw Error(
+                `Recovery found user changes and refuses to overwrite them: ${f.name}`,
+              );
           } else await copyFiles(project, [f]);
         }
         await assertFiles(project, pending.files);
@@ -338,7 +353,7 @@ export async function migrate(options: MigrationOptions) {
           verified.report.status !== "behavior_verified" ||
           verified.report.fingerprint !== pending.fingerprint
         )
-          throw Error("集成前验证已失效");
+          throw Error("Verification became invalid before integration");
         const integrationTests = await executeGo(
           project,
           [],
@@ -359,7 +374,7 @@ export async function migrate(options: MigrationOptions) {
           )
         )
           throw Error(
-            "Pith 集成测试未通过，未提交；查看 integration-tests.json，现场已保留",
+            "Pith integration tests failed; no commit created. See integration-tests.json; state preserved",
           );
         checkCancel();
         await assertFiles(project, pending.files);
@@ -375,7 +390,7 @@ export async function migrate(options: MigrationOptions) {
       delete state.pending;
       delete state.error;
       await save();
-      log(`${pending.id} 已集成并提交 ${committed.slice(0, 8)}`);
+      log(`${pending.id} integrated and committed as ${committed.slice(0, 8)}`);
     };
     try {
       checkCancel();
@@ -395,7 +410,7 @@ export async function migrate(options: MigrationOptions) {
         const unexpected = changes.filter((n) => !allows(n, config.bootstrap));
         if (unexpected.length)
           throw Error(
-            `首次运行只自动提交准备文件；以下修改请先处理：${unexpected.join(", ")}`,
+            `The first run only commits preparation files automatically; resolve these changes first: ${unexpected.join(", ")}`,
           );
         checkCancel();
         await commit(
@@ -403,7 +418,9 @@ export async function migrate(options: MigrationOptions) {
           changes,
           "chore: prepare Portsmith migration inputs",
         );
-        log("迁移计划、接口和验收测试已创建准备提交");
+        log(
+          "Preparation commit created for the migration plan, interfaces and acceptance tests",
+        );
       }
       await ensureClean();
       await save();
@@ -411,13 +428,18 @@ export async function migrate(options: MigrationOptions) {
       while (state.completed.length < units.length && finished < maxUnits) {
         checkCancel();
         if ((await inspectMigration(planRoot)).digest !== digest)
-          throw Error("运行中迁移输入已变化，停止以避免混用快照");
+          throw Error(
+            "Migration inputs changed during execution; stopped to avoid mixing snapshots",
+          );
         const done = new Set(state.completed.map((s) => s.id));
         const item = units.find(
           ({ unit }) =>
             !done.has(unit.id) && unit.dependsOn.every((id) => done.has(id)),
         );
-        if (!item) throw Error("没有可推进任务；请检查依赖图与已提交记录");
+        if (!item)
+          throw Error(
+            "No task can advance; check the dependency graph and committed records",
+          );
         const { unit, spec } = item;
         const taskRoot = path.join(project, config.runs, unit.id);
         const prior = units.filter((x) => done.has(x.unit.id));
@@ -429,7 +451,7 @@ export async function migrate(options: MigrationOptions) {
           const temp = taskRoot + ".preparing";
           if (await exists(temp))
             throw Error(
-              `存在中断的准备目录 ${temp}；确认原进程停止后移走它再重试`,
+              `Interrupted preparation directory exists: ${temp}. Confirm the previous process has stopped, then move it aside and retry`,
             );
           const seed: File[] = [];
           for (const previous of prior)
@@ -445,11 +467,11 @@ export async function migrate(options: MigrationOptions) {
               revision: inspected.plan.revision,
               goal:
                 unit.goal +
-                "\n验收：\n" +
+                "\nAcceptance:\n" +
                 unit.acceptance.join("\n") +
-                "\n必须创建的文件：\n" +
+                "\nRequired output files:\n" +
                 spec.outputs.join("\n") +
-                "\n候选自测使用普通Test前缀，不能使用TestPortsmithJudge。",
+                "\nCandidate tests must use the normal Test prefix, not TestPortsmithJudge.",
               files: [...unit.files, ...unit.references],
               rules: path.join(planRoot, "RULEBOOK.md"),
               goMod: path.join(project, "go.mod"),
@@ -469,7 +491,7 @@ export async function migrate(options: MigrationOptions) {
             await rm(temp, { recursive: true, force: true });
             throw e;
           }
-          log(`${unit.id} 已准备；自动带入 ${seed.length} 个前置文件`);
+          log(`${unit.id} prepared with ${seed.length} seed files`);
         }
         await withLock(taskRoot, async () => {
           const { task } = await loadTask(taskRoot);
@@ -483,7 +505,9 @@ export async function migrate(options: MigrationOptions) {
             task.goModSha256 !== hash(mod) ||
             task.race !== [...prior, item].some((x) => x.spec.race)
           )
-            throw Error(`${unit.id} 的任务不是当前工作流准备的，不能复用`);
+            throw Error(
+              `Task ${unit.id} was not prepared by the current workflow and cannot be reused`,
+            );
           const expectedJudge = judgeFiles.map((f) => ({
             name: f.name,
             sha256: hash(f.data),
@@ -506,7 +530,9 @@ export async function migrate(options: MigrationOptions) {
               ) ||
             task.goSumSha256 !== (sum ? hash(sum) : undefined)
           )
-            throw Error(`${unit.id} 的冻结测试、规则或前置代码与当前计划不符`);
+            throw Error(
+              `Frozen tests, rules or seed code for ${unit.id} do not match the current plan`,
+            );
           let verification = await currentVerification(taskRoot);
           let feedback: string | undefined;
           for (
@@ -517,12 +543,12 @@ export async function migrate(options: MigrationOptions) {
           ) {
             if (maxAttempts > 0 && attempt >= maxAttempts)
               throw Error(
-                `${unit.id} 已达到本次 ${maxAttempts} 次生成/修复上限；候选与进度保留，重跑同一命令可继续。\n${verification?.current ? verificationDiagnostics(verification.report, 2000) : (feedback ?? "尚无有效验证报告")}\n报告：${path.join(taskRoot, "verification.json")}`,
+                `${unit.id} reached the limit of ${maxAttempts} generation/repair attempts for this run; candidate and progress preserved. Rerun the same command to continue.\n${verification?.current ? verificationDiagnostics(verification.report, 2000) : (feedback ?? "No valid verification report yet")}\nReport: ${path.join(taskRoot, "verification.json")}`,
               );
             checkCancel();
             state.attempts[unit.id] = (state.attempts[unit.id] ?? 0) + 1;
             await save();
-            log(`${unit.id} 生成/修复，第 ${state.attempts[unit.id]} 次`);
+            log(`${unit.id} generation/repair ${state.attempts[unit.id]}`);
             const result = await options.generate(taskRoot, feedback);
             checkCancel();
             if (
@@ -535,7 +561,7 @@ export async function migrate(options: MigrationOptions) {
               ].includes(result.status)
             )
               throw Error(
-                `${unit.id} 模型运行失败：${result.error ?? result.status}；详情：${path.join(taskRoot, "last-run.json")}；候选与进度已保留`,
+                `${unit.id} model run failed: ${result.error ?? result.status}; details: ${path.join(taskRoot, "last-run.json")}; candidate and progress preserved`,
               );
             try {
               const files = await candidateFiles(taskRoot);
@@ -543,7 +569,7 @@ export async function migrate(options: MigrationOptions) {
                 (n) => !files.some((f) => f.name === n),
               );
               if (missing.length)
-                throw Error(`缺少约定输出：${missing.join(", ")}`);
+                throw Error(`Missing required outputs: ${missing.join(", ")}`);
               const allowed = new Set([
                 ...(task.writableFiles ?? []),
                 ...(task.seedFiles ?? []).map((f) => f.name),
@@ -552,7 +578,7 @@ export async function migrate(options: MigrationOptions) {
                 ...(sum ? ["go.sum"] : []),
               ]);
               if (files.some((f) => !allowed.has(f.name)))
-                throw Error("候选有未授权输出");
+                throw Error("Candidate contains unauthorized outputs");
               const report = await verifyPort(
                 taskRoot,
                 options.download,
@@ -562,8 +588,8 @@ export async function migrate(options: MigrationOptions) {
               feedback =
                 report.status === "behavior_verified"
                   ? undefined
-                  : `上次验证失败：${report.status}。按verification.json修复，不修改冻结文件。`;
-              log(`${unit.id} 验证：${report.status}`);
+                  : `Previous verification failed: ${report.status}. Repair using verification.json; do not modify frozen files.`;
+              log(`${unit.id} verification: ${report.status}`);
             } catch (e) {
               verification = undefined;
               feedback = e instanceof Error ? e.message : String(e);
@@ -573,7 +599,9 @@ export async function migrate(options: MigrationOptions) {
           checkCancel();
           await ensureClean();
           if ((await inspectMigration(planRoot)).digest !== digest)
-            throw Error("验收后迁移输入已变化，拒绝集成");
+            throw Error(
+              "Migration inputs changed after acceptance; refusing integration",
+            );
           const integration: File[] = [];
           for (const name of spec.outputs)
             integration.push({
@@ -601,7 +629,9 @@ export async function migrate(options: MigrationOptions) {
             });
           for (const f of integration)
             if (await exists(path.join(project, f.name)))
-              throw Error(`集成拒绝覆盖已有文件：${f.name}`);
+              throw Error(
+                `Integration refuses to overwrite an existing file: ${f.name}`,
+              );
           const staging = path.join(taskRoot, "integration");
           if (await exists(staging)) await rm(staging, { recursive: true });
           await copyFiles(staging, integration);

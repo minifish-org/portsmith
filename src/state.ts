@@ -60,7 +60,7 @@ export async function acceptTask(root: string, out: string) {
     verification.report.status !== "behavior_verified"
   )
     throw new Error(
-      "采纳需要当前候选通过独立行为验证；仅编译或候选自测通过不够",
+      "Acceptance requires independent behavior verification of the current candidate; compilation or candidate tests alone are insufficient",
     );
   const files = await candidateFiles(root);
   const digest = await fingerprint(root);
@@ -88,7 +88,7 @@ export async function planStatus(root: string, runs: string) {
       const taskRoot = path.join(runs, unit.id);
       const status = await taskStatus(taskRoot);
       if (status.unit !== unit.id)
-        throw new Error(`任务目录与unit不匹配：${unit.id}`);
+        throw new Error(`Task directory does not match unit: ${unit.id}`);
       const { task } = await loadTask(taskRoot);
       statuses.set(
         unit.id,

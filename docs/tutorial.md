@@ -1,52 +1,15 @@
-# 第一课：看清一次移植
+# First exercise: inspect one migration
 
-本文是内置示例的学习练习。要操作 Pith 的正式迁移，请读 [使用说明书](user-manual.md)，其中明确说明已完成的准备和仍需建立的独立验收测试。
+This is an optional offline exercise. For a real prepared project, use [the manual](user-manual.md).
 
-先在项目根目录运行 `npm run demo`。这是不用密钥的离线练习，会打印新的任务路径。以下用 `<task>` 代表它。
+1. Run `npm run demo`. It replays an existing Go candidate without calling a model and prints a task directory, referred to below as `<task>`.
+2. Read `examples/event-stream/source/packages/ai/src/utils/event-stream.ts`, its tests and `<task>/task.json`. The example ports the generic FIFO event stream, excluding the assistant-message specialization. `RULEBOOK.md` defines common rules; the goal defines this API.
+3. Read `src/agent.ts`. Pi provides native read/write/edit/bash/grep/find/ls tools and the agent loop. Portsmith adds `verify_candidate`, persistent sessions and evidence management. Native tools are not an OS sandbox.
+4. Inspect `oracle.json`, `verification.json` and `judge-check.json`. The reference records seven TS scenarios; independent tests are distinct from model-written tests. A known-wrong implementation must fail the judge.
+5. Add a comment to `<task>/candidate/event_stream.go`, then run `npm run dev -- status --task <task>`. Even a comment changes the fingerprint and makes verification stale. Run `verify` again. To explore a real defect, change FIFO behavior in a copy; do not weaken the judge.
+6. Prepare a fresh task as described in the README and run it with a configured model. `run-*.jsonl` records tool/model events. Pi can compile, test and repair in the same session; rerunning resumes the conversation. Optional positive `--max-turns` and `--timeout` values set explicit budgets.
 
-## 1. 先看输入
-
-打开 `examples/event-stream/source/packages/ai/src/utils/event-stream.ts`。它有事件队列、等待者、结束状态和最终结果。看对应测试，再看 `<task>/task.json` 的 `goal`：这次只移植通用事件流，不做依赖完整消息类型的子类。
-
-`RULEBOOK.md` 规定一般原则，`goal` 规定本次具体API。二者会在每次模型运行时一起提供。
-
-## 2. 看模型究竟能做什么
-
-读 `src/agent.ts` 中的 Pi 原生工具启用、`verify_candidate` 和会话恢复配置。
-
-- `read_reference` 只能读参考清单中的文件。
-- `read_candidate` 可以查看已有候选。
-- `write_candidate` 创建或替换完整候选文件；`edit_candidate` 对已有文件做精确局部修改。二者不能修改独立测试和依赖清单。
-
-Pi负责“请求模型 → 调用工具 → 回传结果 → 继续请求模型”的循环。Portsmith负责控制边界和管理证据。
-
-## 3. 看验证而不是只看编译成功
-
-打开 `<task>/oracle.json`，里面是原TS执行后的事件轨迹。再看 `verification.json` 的三个阶段。`independent-behavior` 是工具维护的测试，不是模型自己生成的测试。
-
-打开 `judge-check.json`，可以看到7个TS基线场景和已知错误实现的失败记录。这是检查测试工具本身有用的证据。
-
-## 4. 亲手验证状态会失效
-
-在 `<task>/candidate/event_stream.go` 中增加一行注释，然后运行：
-
-```sh
-npm run dev -- status --task <task>
-```
-
-即使只改注释，也会出现 `stale_verification`，因为现在的文件已经不是原来那份被验证的文件。重新执行 `verify` 才能恢复。
-
-如果要实验错误行为，在副本中修改FIFO或结束逻辑，再执行verify。不要修改judge来迎合错误实现。
-
-## 5. 自己让模型生成
-
-按README创建一个新的任务，再运行 `run`。它不使用离线示例的答案；参考输入只有原TS、测试、许可证和规则。可用 `--max-turns` 和 `--timeout` 限制每次运行，已有候选在中断后保留。
-
-读 `run-*.jsonl` 能看到模型什么时候读源码、调用了哪些工具、写了哪些文件。Pi 在当前会话内编译、测试、修复并调用 verify_candidate；再次 run 会恢复对话并带入最新诊断。正式接受仍要通过外层独立验证。
-
-## 6. 给自己的模块准备judge
-
-先写一个人审的目录，例如：
+## Bring your own judge
 
 ```text
 my-judge/
@@ -55,8 +18,6 @@ my-judge/
     expected.json
 ```
 
-测试函数必须以 `TestPortsmithJudge` 开头。可以使用共享JSON输入和原TS产生的预期数据，让Go实现读取同样输入并比较输出。多包候选中，目录层级应对应候选Go包。
+Test names must start with `TestPortsmithJudge`. For multiple Go packages, match the candidate directory layout. Establish expected behavior from the original implementation and check that a known-wrong candidate fails. Pass `--judge my-judge` during preparation. Files are frozen and verified by hash; a task without an independent judge cannot claim behavior verification.
 
-创建任务时加入 `--judge my-judge`。Portsmith冻结这份测试，任务约定只修改 candidate，验收会检查冻结文件未被改动；原生工具并非操作系统沙箱。第一次可以故意提供错误Go实现，确认独立测试失败。没有独立judge的普通任务，只能得到自测通过状态。
-
-确认结果后用 `accept` 导出到新目录，再由你决定怎样纳入Pith。导出的是Go源码模块，不是桌面安装包或服务器成品。
+After review, `accept --task <task> --out <new-directory>` exports verified Go source and a receipt. It does not create a desktop installer, commit to Pith or publish a product.

@@ -21,20 +21,21 @@ export function relativeName(name: string) {
     name.includes("\0") ||
     name.split("/").some((p) => !p || p === "." || p === "..")
   )
-    throw new Error(`非法相对路径：${name}`);
+    throw new Error(`Invalid relative path: ${name}`);
   return name;
 }
 export async function checkedFile(root: string, name: string) {
   relativeName(name);
   let current = root;
-  if ((await lstat(root)).isSymbolicLink()) throw new Error("不允许符号链接");
+  if ((await lstat(root)).isSymbolicLink())
+    throw new Error("Symbolic links are not allowed");
   for (const part of name.split("/")) {
     current = path.join(current, part);
     if ((await lstat(current)).isSymbolicLink())
-      throw new Error("不允许符号链接");
+      throw new Error("Symbolic links are not allowed");
   }
   if (!(await lstat(current)).isFile())
-    throw new Error(`必须是普通文件：${name}`);
+    throw new Error(`Expected a regular file: ${name}`);
   return current;
 }
 export async function readJson<T>(root: string, name: string): Promise<T> {
@@ -60,7 +61,7 @@ export async function withLock<T>(rootInput: string, fn: () => Promise<T>) {
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "EEXIST")
       throw new Error(
-        "任务正在运行；异常中断后请先确认原进程已退出，再删除 .lock",
+        "Task is already running. After an interrupted run, confirm its process has exited before removing .lock.",
       );
     throw e;
   }
@@ -78,23 +79,27 @@ export async function snapshotFiles(
 ) {
   const files: { name: string; data: Buffer; sha256: string }[] = [];
   let totalBytes = 0;
-  if ((await lstat(root)).isSymbolicLink()) throw new Error("不允许符号链接");
+  if ((await lstat(root)).isSymbolicLink())
+    throw new Error("Symbolic links are not allowed");
   async function visit(dir: string) {
     for (const e of (
       await readdir(path.join(root, dir), { withFileTypes: true })
     ).sort((a, b) => a.name.localeCompare(b.name))) {
       const name = path.posix.join(dir, e.name);
-      if (e.isSymbolicLink()) throw new Error(`不允许符号链接：${name}`);
+      if (e.isSymbolicLink())
+        throw new Error(`Symbolic links are not allowed：${name}`);
       if (e.isDirectory()) await visit(name);
       else {
         const file = await checkedFile(root, name);
         if ((await lstat(file)).size > Math.min(maxBytes, maxFileBytes(name)))
-          throw new Error(`文件太大：${name}`);
+          throw new Error(`File exceeds the configured size limit: ${name}`);
         const data = await readFile(file);
         files.push({ name, data, sha256: hash(data) });
         totalBytes += data.length;
         if (files.length > maxFiles || totalBytes > maxBytes)
-          throw new Error("任务太大，请拆成更小模块");
+          throw new Error(
+            "Task exceeds the configured size limit; split it into smaller modules",
+          );
       }
     }
   }

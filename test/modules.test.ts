@@ -15,6 +15,7 @@ import test from "node:test";
 import { analyze, saveAnalysis } from "../src/analyze.js";
 import { atomicJson, hash, snapshotFiles } from "../src/files.js";
 import { migrate } from "../src/migrate.js";
+import { inspectModules } from "../src/modules.js";
 import { loadTask, writeCandidate } from "../src/workspace.js";
 
 const exec = promisify(execFile);
@@ -169,7 +170,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
       await writeCandidate(root, "alpha/data.json", '{"fixture":true}\n');
       await assert.rejects(
         writeCandidate(root, "alpha/unlisted.json", "{}"),
-        /只能写|清单/,
+        /Only candidate|manifest/,
       );
     } else {
       await assert.rejects(
@@ -178,7 +179,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
           "alpha/value.go",
           "package alpha\nfunc Value()int{return 0}\n",
         ),
-        /清单|前置/,
+        /manifest|seed/,
       );
       assert.match(
         await readFile(path.join(root, "candidate/alpha/value.go"), "utf8"),
@@ -199,6 +200,123 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   };
   return { project, plan, source, git, put, ready, generate };
 }
+
+test(
+  "additive plan isolates its journal and freezes the accepted baseline",
+  { timeout: 120000 },
+  async (t) => {
+    const f = await fixture(t);
+    const name = "packages/existing/value.go";
+    const data = "package existing\nconst Value = 42\n";
+    await f.put(path.join(f.project, name), data);
+    await f.git("add", name);
+    await f.git("commit", "-qm", "accepted baseline");
+    const base = await f.git("rev-parse", "HEAD");
+    const workflow = JSON.parse(
+      await readFile(path.join(f.plan, "workflow.json"), "utf8"),
+    );
+    workflow.journal = ".portsmith/sdk/modules.json";
+    workflow.runs = ".portsmith/sdk/runs";
+    workflow.baseline = { commit: base, files: [{ name, sha256: hash(data) }] };
+    await atomicJson(path.join(f.plan, "workflow.json"), workflow);
+    const old = '{"legacy":"must remain untouched"}\n';
+    await f.put(path.join(f.project, ".portsmith/modules.json"), old);
+    let calls = 0;
+    const generate = async (root: string) => {
+      calls++;
+      assert.equal(
+        await readFile(path.join(root, "candidate", name), "utf8"),
+        data,
+      );
+      await assert.rejects(writeCandidate(root, name, "changed"));
+      await f.generate(root);
+      await writeCandidate(
+        root,
+        "alpha/value.go",
+        'package alpha\nimport "example.com/modules/packages/existing"\nfunc Value() int {return existing.Value}\n',
+      );
+      return { status: "candidate_ready" };
+    };
+    const result = await migrate({ plan: f.plan, commit: true, generate });
+    assert.equal(result.status, "needs-preparation");
+    assert.equal(calls, 1);
+    await migrate({ plan: f.plan, commit: true, generate });
+    assert.equal(calls, 1, "resume must reuse accepted step");
+    assert.equal(
+      await readFile(path.join(f.project, ".portsmith/modules.json"), "utf8"),
+      old,
+    );
+    const saved = JSON.parse(
+      await readFile(path.join(f.project, workflow.journal), "utf8"),
+    );
+    assert.equal(saved.steps.length, 1);
+    await f.put(path.join(f.project, name), data + "// drift\n");
+    await assert.rejects(inspectModules(f.plan), /baseline changed/);
+    await f.put(path.join(f.project, name), data);
+    workflow.baseline.files[0].sha256 = "0".repeat(64);
+    await atomicJson(path.join(f.plan, "workflow.json"), workflow);
+    await assert.rejects(inspectModules(f.plan), /baseline changed/);
+    workflow.baseline.files[0].sha256 = hash(data);
+    workflow.journal = ".portsmith/modules.json";
+    await atomicJson(path.join(f.plan, "workflow.json"), workflow);
+    await assert.rejects(inspectModules(f.plan), /separate journal/);
+  },
+);
+
+test(
+  "additive baseline survives full module commits and completion resume",
+  { timeout: 120000 },
+  async (t) => {
+    const f = await fixture(t);
+    await f.ready();
+    const name = "packages/existing/value.go";
+    const data = "package existing\nconst Value = 42\n";
+    await f.put(path.join(f.project, name), data);
+    await f.git("add", name);
+    await f.git("commit", "-qm", "baseline");
+    const workflow = JSON.parse(
+      await readFile(path.join(f.plan, "workflow.json"), "utf8"),
+    );
+    workflow.journal = ".portsmith/increment/modules.json";
+    workflow.runs = ".portsmith/increment/runs";
+    workflow.baseline = {
+      commit: await f.git("rev-parse", "HEAD"),
+      files: [{ name, sha256: hash(data) }],
+    };
+    await atomicJson(path.join(f.plan, "workflow.json"), workflow);
+    const old = '{"previous":"accepted"}\n';
+    await f.put(path.join(f.project, ".portsmith/modules.json"), old);
+    let calls = 0;
+    const generate = async (root: string) => {
+      calls++;
+      assert.equal(
+        await readFile(path.join(root, "candidate", name), "utf8"),
+        data,
+      );
+      return f.generate(root);
+    };
+    assert.equal(
+      (await migrate({ plan: f.plan, commit: true, generate })).status,
+      "complete",
+    );
+    assert.equal(calls, 3);
+    assert.equal(
+      (await migrate({ plan: f.plan, commit: true, generate })).status,
+      "complete",
+    );
+    assert.equal(calls, 3);
+    assert.equal(await readFile(path.join(f.project, name), "utf8"), data);
+    assert.equal(
+      await readFile(path.join(f.project, ".portsmith/modules.json"), "utf8"),
+      old,
+    );
+    assert.equal(await f.git("status", "--porcelain"), "");
+    const state = JSON.parse(
+      await readFile(path.join(f.project, workflow.journal), "utf8"),
+    );
+    assert.equal(state.modules.length, 2);
+  },
+);
 
 test(
   "default migration continues beyond three failed generations without user intervention",
@@ -256,7 +374,7 @@ test(
       }),
       (error: unknown) => {
         assert.ok(error instanceof Error);
-        assert.match(error.message, /1 次生成\/修复上限/);
+        assert.match(error.message, /limit of 1 generation\/repair attempts/);
         assert.match(error.message, /compile_failed/);
         assert.match(
           error.message,
@@ -497,7 +615,7 @@ test(
     await f.put(path.join(f.plan, "First.md"), "altered contract");
     await assert.rejects(
       migrate({ plan: f.plan, commit: false, check: true, generate: noModel }),
-      /已完成步骤/,
+      /completed step/i,
     );
   },
 );
@@ -511,7 +629,7 @@ test(
     await f.put(path.join(f.project, "personal.txt"), "keep");
     await assert.rejects(
       migrate({ plan: f.plan, commit: true, generate: (r) => f.generate(r) }),
-      /其他修改/,
+      /unrelated changes/,
     );
     assert.equal(await f.git("rev-list", "--count", "HEAD"), "1");
     await rm(path.join(f.project, "personal.txt"));
@@ -527,7 +645,7 @@ test(
           return r;
         },
       }),
-      /取消/,
+      /cancelled/,
     );
     const hook = path.join(f.project, ".git/hooks/pre-commit");
     await assert.rejects(
@@ -566,7 +684,7 @@ test(
     await writeFile(path.join(f.project, receiptName), receiptBytes);
     await assert.rejects(
       snapshotFiles(staging, 2000, 32 * 1024 * 1024, () => 512 * 1024),
-      /文件太大/,
+      /size limit/,
     );
     await f.put(file, original + "// user change\n");
     await rm(hook);
@@ -575,7 +693,7 @@ test(
     };
     await assert.rejects(
       migrate({ plan: f.plan, commit: true, maxUnits: 1, generate: noModel }),
-      /拒绝覆盖/,
+      /refuses to overwrite/,
     );
     await f.put(file, original);
     assert.equal(
@@ -606,7 +724,7 @@ test("v2 preflight rejects stale sources and missing judges before model calls o
   await f.put(path.join(f.source, "value.ts"), "export const value=43;\n");
   await assert.rejects(
     migrate({ plan: f.plan, commit: true, generate: noModel }),
-    /源码在分析后变化/,
+    /Source changed after analysis/,
   );
   await f.put(path.join(f.source, "value.ts"), "export const value=42;\n");
   await f.put(
@@ -615,7 +733,7 @@ test("v2 preflight rejects stale sources and missing judges before model calls o
   );
   await assert.rejects(
     migrate({ plan: f.plan, commit: true, generate: noModel }),
-    /独立测试缺失/,
+    /Missing independent tests/,
   );
   assert.equal(await f.git("rev-parse", "HEAD"), before);
 });
@@ -693,11 +811,11 @@ test(
         },
       });
     await f.put(path.join(f.plan, "catalog.json"), data + " ");
-    await assert.rejects(check, /静态资产变更/);
+    await assert.rejects(check, /Static asset changed/);
     await f.put(path.join(f.plan, "catalog.json"), data);
     w.batches.foundation.steps[1].outputs.push(name);
     await atomicJson(workflowFile, w);
-    await assert.rejects(check, /静态资产不可声明/);
+    await assert.rejects(check, /Static assets cannot be declared/);
     w.batches.foundation.steps[1].outputs.pop();
     await atomicJson(workflowFile, w);
     let steps = 0;
@@ -712,7 +830,7 @@ test(
         );
         await assert.rejects(
           writeCandidate(root, name, "{}"),
-          /前置|清单|只能写/,
+          /seed|manifest|Only candidate/,
         );
         return f.generate(root);
       },

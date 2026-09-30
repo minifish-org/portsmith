@@ -1,0 +1,7 @@
+{
+  "date": "2026-09-30",
+  "defaultLanguage": "English",
+  "productMessages": "No CJK ideographs found in maintained runtime source",
+  "preservedFiles": [],
+  "policy": "Keep original hash-bound migration evidence and Unicode behavioral fixtures byte-for-byte; English is used for maintained product messages and public guides."
+}

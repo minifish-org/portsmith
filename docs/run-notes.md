@@ -1,25 +1,21 @@
-# 0.1 本机验收记录
+# Historical local acceptance record: 0.1
 
-日期：2026-09-28。环境：macOS arm64、Node 22.22.3、Go 1.24.2。
+Date: 2026-09-28. Environment: macOS arm64, Node 22.22.3, Go 1.24.2. This records the checks performed at that time, not the current test count.
 
-## 已执行
+## Checks performed
 
-- TypeScript 类型检查和可发布JavaScript构建通过。
-- 13个自动测试通过：源码快照、路径边界、实际Pi SDK工具循环、别名和依赖解析、目标包循环、计划变化、互斥锁、精确编辑、执行超时、独立验证、失效收据、依赖冻结等。
-- EventStream离线示例通过7个TS对照场景、Go取消检查及自己的测试。验证器也检测到了已知错误Go实现。
-- 使用现有DeepSeek配置实际生成候选。初次生成7轮；后续人工审阅发现“已解析结果与已取消context同时就绪”的偶发错误，专项重复测试20次中失败14次。
-- 将审阅反馈交回模型，修复中出现过整个测试文件被尾部片段覆盖的问题，编译阶段明确失败。由此补上精确编辑工具、完整Go文件的package检查和分页读取；再次运行修复，最后通过独立验证及20次专项重复测试。
-- 模型运行日志没有冒充测试结果。中间一次模型回复被截断，标为model_error；已有候选保留，后续独立编译发现问题并继续修复。
-- 实测第三方Go库：冻结github.com/google/uuid v1.6.0的go.mod/go.sum，默认禁止下载时使用已有缓存，通过编译、自测和独立judge。
-- npm打包、在独立临时项目安装、运行安装后的命令及离线示例通过；包中不含.env、模型运行日志或本机任务目录。
-- 已导出真实模型生成且验证后的候选到本机`.portsmith/accepted-event-stream`。未把它纳入Pith，也未推送或发布仓库。
+- Type checking and distributable JavaScript build passed.
+- Thirteen automated tests passed, covering frozen sources, paths, real Pi SDK tool loops, resolution, package cycles, plan changes, locks, exact edits, process timeout, independent verification, stale receipts and dependencies.
+- The offline EventStream example passed seven TS reference scenarios, Go cancellation checks and candidate tests. The judge rejected a known-wrong Go implementation.
+- A live DeepSeek run produced the first candidate in seven turns. Review found an intermittent defect when a resolved result and cancelled context were both ready: a targeted repeated test failed 14 of 20 runs.
+- During repair, a trailing fragment overwrote a whole test file and compilation failed. Exact editing and complete-file package checks were added. Subsequent independent verification and 20 repeated targeted checks passed.
+- An intermediate truncated response was classified as a model error; candidate files were preserved and independently checked. Model narrative was not accepted as test evidence.
+- A frozen `github.com/google/uuid v1.6.0` dependency passed compile, candidate and independent tests using the local module cache with downloads disabled.
+- npm packing, installation into a temporary project, installed CLI execution and the offline example passed. The package excluded env files, model logs and local tasks.
+- The verified live-model candidate was exported locally to `.portsmith/accepted-event-stream`. That historical run did not integrate it into Pith or publish the repository.
 
-## 分析真实Pi快照
+## Historical Pi snapshot analysis
 
-对已有上游快照扫描到1153个TS/JS文件、276094物理行，生成63个按目录分组的草稿任务，目标目录分组产生6组包循环。
+The initial partial snapshot contained 1,153 TS/JS files and 276,094 physical lines. Directory grouping produced 63 draft tasks and six target-package cycle groups. It lacked the root tsconfig.base.json and contained 477 unresolved/computed references. These were reported as preparation gaps, not complete dependency coverage.
 
-该快照不是完整构建环境：缺少根tsconfig.base.json，并有477个未解析或计算式引用。工具明确报告这些缺口，未把它解释成“Pi的依赖已经完整识别”。正式迁移前应补齐来源配置并逐项审阅。
-
-## 证据范围
-
-以上是Portsmith工作流程和选定示例的验收，不代表Pi内核已经移植，也不代表所有Go并发、回调重入、平台差异或性能均已验证。CI配置已经提供，本次记录不声称云端CI已经执行。
+These checks establish the workflow and selected example only. They did not establish a complete Pi port, all Go concurrency/reentrancy/platform behavior or performance, and did not claim hosted CI had run. Later release evidence is recorded separately.

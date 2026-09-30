@@ -1,5 +1,6 @@
 import { mkdir, readFile, realpath, rename, rm } from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import {
   atomicJson,
   checkedFile,
@@ -72,6 +73,10 @@ type Workflow = {
   runs: string;
   bootstrap: string[];
   startPolicy?: "all-prepared" | "available-steps";
+  /** Separate journal for an additive migration; the project lock is shared. */
+  journal?: string;
+  /** Existing product files, frozen at a reviewed commit, injected read-only. */
+  baseline?: { commit: string; files: Entry[] };
   batches: Record<string, BatchConfig>;
 };
 type Item = {
@@ -116,13 +121,13 @@ const bigSnapshot = (root: string) => snapshotFiles(root);
 function graph(items: { id: string; dependsOn: string[] }[]) {
   const nodes = new Map(items.map((i) => [i.id, i]));
   if (nodes.size !== items.length || items.some((i) => !ID.test(i.id)))
-    throw Error("重复或无效 ID");
+    throw Error("Duplicate or invalid ID");
   const done = new Set<string>(),
     visiting = new Set<string>();
   function visit(id: string) {
-    if (!nodes.has(id)) throw Error(`未知依赖：${id}`);
+    if (!nodes.has(id)) throw Error(`Unknown dependency: ${id}`);
     if (done.has(id)) return;
-    if (visiting.has(id)) throw Error(`依赖成环：${id}`);
+    if (visiting.has(id)) throw Error(`Dependency cycle: ${id}`);
     visiting.add(id);
     for (const dep of nodes.get(id)!.dependsOn) visit(dep);
     visiting.delete(id);
@@ -145,7 +150,7 @@ function outputName(name: string) {
     ["go.mod", "go.sum", "LICENSE"].includes(name) ||
     name.startsWith("migration/")
   )
-    throw Error(`不允许的模块输出：${name}`);
+    throw Error(`Module output is not allowed: ${name}`);
 }
 export async function inspectModules(planInput: string) {
   const root = await realpath(planInput);
@@ -159,20 +164,22 @@ export async function inspectModules(planInput: string) {
     !w.batches ||
     !Array.isArray(w.bootstrap)
   )
-    throw Error("模块工作流配置不完整：需要 v2 modules/batches 与执行步骤");
+    throw Error(
+      "Incomplete module workflow: v2 modules/batches and execution steps are required",
+    );
   if (
     w.startPolicy !== undefined &&
     !["all-prepared", "available-steps"].includes(w.startPolicy)
   )
-    throw Error("startPolicy 必须为 all-prepared 或 available-steps");
+    throw Error("startPolicy must be all-prepared or available-steps");
   graph(p.modules);
   graph(p.batches);
   const project = await realpath(path.resolve(root, w.project));
   if ((await git(project, ["rev-parse", "--show-toplevel"])) !== project)
-    throw Error("project 必须是目标 Git 根目录");
+    throw Error("project must be the target Git root");
   relativeName(w.runs);
   if (!w.runs.startsWith(".portsmith/"))
-    throw Error("模块任务目录必须在 .portsmith 内");
+    throw Error("Module task directories must be under .portsmith");
   for (const n of w.bootstrap) {
     relativeName(n);
     if (
@@ -180,11 +187,11 @@ export async function inspectModules(planInput: string) {
       n.startsWith(".env") ||
       n.startsWith(".portsmith")
     )
-      throw Error("bootstrap 不能包含凭据/内部状态");
+      throw Error("bootstrap must not include credentials or internal state");
   }
   const source = await realpath(path.resolve(project, p.source));
   const raw = await readFile(await checkedFile(root, "analysis.json"));
-  if (hash(raw) !== p.analysisSha256) throw Error("分析快照变更");
+  if (hash(raw) !== p.analysisSha256) throw Error("Analysis snapshot changed");
   const analysis = JSON.parse(raw.toString()) as {
     files: { path: string; sha256: string }[];
     configs: { path: string; sha256: string }[];
@@ -192,7 +199,7 @@ export async function inspectModules(planInput: string) {
   const known = new Map(analysis.files.map((f) => [f.path, f.sha256]));
   for (const c of analysis.configs)
     if (hash(await readFile(await checkedFile(source, c.path))) !== c.sha256)
-      throw Error(`源码配置已变化：${c.path}`);
+      throw Error(`Source configuration changed: ${c.path}`);
   const rules = await readFile(await checkedFile(root, "RULEBOOK.md"));
   const mod = await readFile(await checkedFile(project, "go.mod"));
   const sum = (await exists(path.join(project, "go.sum")))
@@ -201,14 +208,14 @@ export async function inspectModules(planInput: string) {
   await checkedFile(root, "go.mod"); // keep fixture trees out of root go test ./...
   const batches = new Map(p.batches.map((b) => [b.id, b]));
   if (Object.keys(w.batches).some((id) => !batches.has(id)))
-    throw Error("工作流包含不在计划中的批次");
+    throw Error("Workflow contains a batch not listed in the plan");
   const listed = p.modules.flatMap((m) => m.batches);
   if (
     new Set(listed).size !== p.batches.length ||
     listed.length !== p.batches.length ||
     listed.some((id) => !batches.has(id))
   )
-    throw Error("批次归属不完整");
+    throw Error("Batch ownership is incomplete");
   const items: Item[] = [],
     outputOwners = new Map<string, string>(),
     assetOwners = new Set<string>(),
@@ -220,7 +227,7 @@ export async function inspectModules(planInput: string) {
         b.module !== m.id ||
         b.dependsOn.some((d) => batches.get(d)?.module !== m.id)
       )
-        throw Error(`批次归属/依赖无效：${id}`);
+        throw Error(`Invalid batch ownership/dependencies: ${id}`);
       const cfg = w.batches[id];
       if (
         !cfg ||
@@ -228,12 +235,12 @@ export async function inspectModules(planInput: string) {
         !Array.isArray(cfg.steps) ||
         (cfg.status !== "ready" && !cfg.reason)
       )
-        throw Error(`批次准备状态缺失：${id}`);
+        throw Error(`Missing batch preparation status: ${id}`);
       if (
         (cfg.status === "planned" && cfg.steps.length) ||
         (cfg.status === "ready" && !cfg.steps.length)
       )
-        throw Error(`批次状态和步骤不一致：${id}`);
+        throw Error(`Batch status does not match its steps: ${id}`);
       const ids = new Set<string>();
       for (const s of cfg.steps) {
         if (
@@ -244,15 +251,15 @@ export async function inspectModules(planInput: string) {
           !s.outputs?.length ||
           !s.tests?.length
         )
-          throw Error(`步骤配置无效：${id}/${s.id}`);
+          throw Error(`Invalid step configuration: ${id}/${s.id}`);
         ids.add(s.id);
         const sources = [];
         for (const name of s.sources) {
           if (![...b.sources, ...b.references].includes(name))
-            throw Error(`来源不属于批次：${id}/${name}`);
+            throw Error(`Source is not part of the batch: ${id}/${name}`);
           const data = await readFile(await checkedFile(source, name));
           if (!known.has(name) || known.get(name) !== hash(data))
-            throw Error(`源码在分析后变化：${name}`);
+            throw Error(`Source changed after analysis: ${name}`);
           sources.push({ name, sha256: hash(data) });
         }
         const contract = await readFile(await checkedFile(root, s.contract));
@@ -264,10 +271,14 @@ export async function inspectModules(planInput: string) {
             outputOwners.has(a.target) ||
             s.outputs.includes(a.target)
           )
-            throw Error(`静态资产目标冲突或未登记：${a.target}`);
+            throw Error(
+              `Static asset target conflicts or is not registered: ${a.target}`,
+            );
           const data = await readFile(await checkedFile(root, a.source));
           if (hash(data) !== a.sha256)
-            throw Error(`静态资产变更或超限：${a.source}`);
+            throw Error(
+              `Static asset changed or exceeds a configured limit: ${a.source}`,
+            );
           assets.push({ name: a.target, data });
           outputOwners.set(a.target, m.id);
           assetOwners.add(a.target);
@@ -285,16 +296,20 @@ export async function inspectModules(planInput: string) {
               new RegExp(`func\\s+${n}\\s*\\(`).test(testText),
           )
         )
-          throw Error(`独立测试缺失：${id}/${s.id}`);
+          throw Error(`Missing independent tests: ${id}/${s.id}`);
         if (
           !s.outputs.some((n) => n.endsWith("_test.go")) ||
           !s.outputs.some((n) => n.endsWith(".go") && !n.endsWith("_test.go"))
         )
-          throw Error(`步骤需要实现和自测：${id}/${s.id}`);
+          throw Error(
+            `Step requires implementation and candidate tests: ${id}/${s.id}`,
+          );
         for (const n of s.outputs) {
           outputName(n);
           if (assetOwners.has(n))
-            throw Error(`静态资产不可声明为可写输出：${n}`);
+            throw Error(
+              `Static assets cannot be declared as writable outputs: ${n}`,
+            );
           if (
             !b.outputs.includes(n) &&
             !(
@@ -304,9 +319,9 @@ export async function inspectModules(planInput: string) {
               )
             )
           )
-            throw Error(`输出未列入计划：${id}/${n}`);
+            throw Error(`Output is not listed in the plan: ${id}/${n}`);
           if (outputOwners.has(n) && outputOwners.get(n) !== m.id)
-            throw Error(`模块输出冲突：${n}`);
+            throw Error(`Module output conflict: ${n}`);
           outputOwners.set(n, m.id);
         }
         for (const f of judge) {
@@ -315,7 +330,9 @@ export async function inspectModules(planInput: string) {
             (!f.name.endsWith("_test.go") && !f.name.includes("/testdata/")) ||
             judgeOwners.has(f.name)
           )
-            throw Error(`独立测试路径冲突或非法：${f.name}`);
+            throw Error(
+              `Conflicting or invalid independent test path: ${f.name}`,
+            );
           judgeOwners.add(f.name);
         }
         const key = `${m.id}/${id}/${s.id}`;
@@ -351,19 +368,95 @@ export async function inspectModules(planInput: string) {
             ),
         )
       )
-        throw Error(`ready 批次尚未覆盖全部输出：${id}`);
+        throw Error(`Ready batch does not cover all outputs: ${id}`);
     }
   for (const n of judgeOwners)
-    if (outputOwners.has(n)) throw Error(`候选可覆盖独立测试：${n}`);
+    if (outputOwners.has(n))
+      throw Error(`Candidate can overwrite an independent test: ${n}`);
+  if (w.journal !== undefined) {
+    relativeName(w.journal);
+    if (
+      !/^\.portsmith\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.json$/.test(
+        w.journal,
+      )
+    )
+      throw Error("journal must be a JSON file under .portsmith");
+  }
+  const baseline: File[] = [];
+  if (w.baseline) {
+    if (!/^[a-f0-9]{40}$/.test(w.baseline.commit) || !w.baseline.files?.length)
+      throw Error(
+        "baseline requires a full commit and non-empty file manifest",
+      );
+    if (!w.journal || w.journal === ".portsmith/modules.json")
+      throw Error("an additive baseline requires a separate journal");
+    await git(project, [
+      "merge-base",
+      "--is-ancestor",
+      w.baseline.commit,
+      "HEAD",
+    ]);
+    const seen = new Set<string>();
+    // ls-tree verifies bytes against Git objects without text decoding.
+    const tree = new Map(
+      (await git(project, ["ls-tree", "-r", w.baseline.commit]))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          const [meta, name] = line.split("\t");
+          return [name!, meta!.split(" ")] as const;
+        }),
+    );
+    for (const f of w.baseline.files) {
+      relativeName(f.name);
+      if (
+        !/^[a-f0-9]{64}$/.test(f.sha256) ||
+        seen.has(f.name) ||
+        !/^(packages|internal|cmd)\//.test(f.name) ||
+        f.name.split("/").some((n) => n.startsWith(".")) ||
+        outputOwners.has(f.name) ||
+        judgeOwners.has(f.name)
+      )
+        throw Error(`invalid or overlapping baseline file: ${f.name}`);
+      seen.add(f.name);
+      const data = await readFile(await checkedFile(project, f.name));
+      if (
+        f.name
+          .split("/")
+          .some(
+            (n) =>
+              n.startsWith("portsmith_judge") || n.startsWith("port_oracle"),
+          ) ||
+        (f.name.endsWith("_test.go") &&
+          /^\s*func\s+TestPortsmithJudge\w*\s*\(/m.test(data.toString()))
+      )
+        throw Error(
+          `baseline contains a reserved judge; keep it in project integration tests: ${f.name}`,
+        );
+      const object = tree.get(f.name);
+      const blob = createHash("sha1")
+        .update(`blob ${data.length}\0`)
+        .update(data)
+        .digest("hex");
+      if (
+        !object ||
+        object[0] !== "100644" ||
+        object[2] !== blob ||
+        hash(data) !== f.sha256
+      )
+        throw Error(`baseline changed: ${f.name}`);
+      baseline.push({ name: f.name, data });
+    }
+  }
   const names = items.flatMap((s) => s.spec.tests);
   if (new Set(names).size !== names.length)
-    throw Error("不同步骤的独立测试名必须唯一");
+    throw Error("Independent test names must be unique across steps");
   if (
     w.bootstrap.some((n) =>
       [...outputOwners.keys()].some((o) => allows(o, [n])),
     )
   )
-    throw Error("bootstrap 不能包括产品输出");
+    throw Error("bootstrap must not include product outputs");
   const identity = hash(
     JSON.stringify({
       revision: p.revision,
@@ -379,11 +472,13 @@ export async function inspectModules(planInput: string) {
         dependsOn: b.dependsOn,
       })),
       runs: w.runs,
+      ...(w.journal ? { journal: w.journal } : {}),
+      ...(w.baseline ? { baseline: w.baseline } : {}),
       rules: hash(rules),
       license: hash(await readFile(await checkedFile(source, "LICENSE"))),
     }),
   );
-  return { root, p, w, project, source, mod, sum, items, identity };
+  return { root, p, w, project, source, mod, sum, items, identity, baseline };
 }
 
 function nextWork(i: Awaited<ReturnType<typeof inspectModules>>, state: State) {
@@ -419,17 +514,21 @@ async function validDone(
   state: State,
 ) {
   if (state.version !== 2 || state.identity !== i.identity)
-    throw Error("来源/模块结构/规则变更；需重新规划，不能复用进度");
+    throw Error(
+      "Source, module structure or rules changed; replan instead of reusing progress",
+    );
   const verified = new Set(state.steps.map((s) => s.key));
   if (
     verified.size !== state.steps.length ||
     new Set(state.modules.map((m) => m.id)).size !== state.modules.length
   )
-    throw Error("模块进度记录重复");
+    throw Error("Duplicate module progress records");
   for (const d of state.steps) {
     const item = i.items.find((s) => s.key === d.key);
     if (!item || item.seal !== d.seal)
-      throw Error(`已完成步骤的来源/契约/验收已变更：${d.key}`);
+      throw Error(
+        `Completed step source, contract or acceptance changed: ${d.key}`,
+      );
     const siblings = i.items.filter((s) => s.batch === item.batch);
     if (
       siblings
@@ -439,7 +538,7 @@ async function validDone(
         )
         .some((s) => !verified.has(s.key))
     )
-      throw Error(`不能在已完成步骤前插入新步骤：${d.key}`);
+      throw Error(`Cannot insert a new step before a completed step: ${d.key}`);
     const batch = i.p.batches.find((b) => b.id === item.batch)!;
     if (
       batch.dependsOn.some(
@@ -448,7 +547,9 @@ async function validDone(
           i.items.some((s) => s.batch === id && !verified.has(s.key)),
       )
     )
-      throw Error(`已完成步骤的前置批次被扩展：${d.key}`);
+      throw Error(
+        `A prerequisite batch of a completed step was extended: ${d.key}`,
+      );
     const root = path.join(i.project, d.task);
     const v = await currentVerification(root);
     if (
@@ -456,19 +557,19 @@ async function validDone(
       v.report.status !== "behavior_verified" ||
       v.report.fingerprint !== d.fingerprint
     )
-      throw Error(`已完成步骤验证失效：${d.key}`);
+      throw Error(`Completed step verification is no longer valid: ${d.key}`);
     await assertFiles(path.join(root, "candidate"), d.files);
   }
   for (const m of state.modules) {
     if (!i.p.modules.some((x) => x.id === m.id))
-      throw Error(`未知已提交模块：${m.id}`);
+      throw Error(`Unknown committed module: ${m.id}`);
     if (
       i.p.modules
         .find((x) => x.id === m.id)!
         .batches.some((b) => i.w.batches[b].status !== "ready") ||
       i.items.some((s) => s.module === m.id && !verified.has(s.key))
     )
-      throw Error(`已提交模块的执行范围变更：${m.id}`);
+      throw Error(`Committed module execution scope changed: ${m.id}`);
     await git(i.project, ["merge-base", "--is-ancestor", m.commit, "HEAD"]);
     await assertFiles(i.project, m.files);
   }
@@ -477,7 +578,7 @@ async function validDone(
 export async function migrateModules(options: MigrationOptions) {
   const i = await inspectModules(options.plan);
   const control = path.join(i.project, ".portsmith"),
-    journal = path.join(control, "modules.json");
+    journal = path.join(i.project, i.w.journal ?? ".portsmith/modules.json");
   const fresh = (): State => ({
     version: 2,
     identity: i.identity,
@@ -487,7 +588,7 @@ export async function migrateModules(options: MigrationOptions) {
   });
   const load = async () =>
     (await exists(journal))
-      ? readJson<State>(control, "modules.json")
+      ? readJson<State>(i.project, i.w.journal ?? ".portsmith/modules.json")
       : fresh();
   const startPolicy = i.w.startPolicy ?? "all-prepared";
   const blocked = i.p.batches
@@ -538,14 +639,17 @@ export async function migrateModules(options: MigrationOptions) {
       preparedSteps: i.items.length,
       verifiedSteps: state.steps.length,
       blocked,
-      note:
-        blocked.length && startPolicy === "all-prepared"
-          ? "完整计划尚未准备齐全；本次不会调用模型、创建任务或提交。首步通过不能解锁缺失材料，请先补齐全部批次。"
-          : "准备状态不代表 Go 模块已经迁移完成；--commit 才会调用模型并保存进度。",
+      note: !n.module
+        ? "All planned modules passed acceptance and were committed. No generation is needed."
+        : blocked.length && startPolicy === "all-prepared"
+          ? "The complete plan is not prepared. No model calls, task creation or commits will occur. Preparing the first step does not unblock missing materials; prepare all batches first."
+          : "Preparation status does not mean the Go module is implemented. Use --commit to call the model and save progress.",
     };
   }
   if (!options.commit)
-    throw Error("模块迁移需要 --commit；允许准备提交和整模块提交，不会 push");
+    throw Error(
+      "Module migration requires --commit, allowing preparation and whole-module commits; it does not push",
+    );
   const attempts = options.maxAttempts ?? 0,
     limit = options.maxUnits ?? i.p.modules.length;
   if (
@@ -555,20 +659,30 @@ export async function migrateModules(options: MigrationOptions) {
     limit < 1
   )
     throw Error(
-      "max-attempts 为非负整数（0 不限制）；max-units 为正整数（v2 计模块）",
+      "max-attempts must be non-negative (0 means unlimited); max-units must be positive (v2 counts modules)",
     );
   await mkdir(control, { recursive: true });
-  await git(i.project, ["check-ignore", ".portsmith/modules.json"]);
+  await git(i.project, [
+    "check-ignore",
+    i.w.journal ?? ".portsmith/modules.json",
+  ]);
   const log = options.onProgress ?? (() => {});
   const cancel = () => {
-    if (options.signal?.aborted) throw Error("迁移已取消；模块候选与进度保留");
+    if (options.signal?.aborted)
+      throw Error(
+        "Migration cancelled; module candidate and progress preserved",
+      );
   };
   return withLock(control, async () => {
+    await mkdir(path.dirname(journal), { recursive: true });
     const state = await load();
     const save = () => atomicJson(journal, state);
     const clean = async () => {
       const d = await dirty(i.project);
-      if (d.length) throw Error(`正式工作区存在其他修改：${d.join(", ")}`);
+      if (d.length)
+        throw Error(
+          `Target working tree has unrelated changes: ${d.join(", ")}`,
+        );
     };
     const unchanged = async () => {
       const now = await inspectModules(i.root);
@@ -581,7 +695,9 @@ export async function migrateModules(options: MigrationOptions) {
         hash(now.mod) !== hash(i.mod) ||
         (now.sum && hash(now.sum)) !== (i.sum && hash(i.sum))
       )
-        throw Error("运行中迁移材料变化；已停止，重跑前审查材料");
+        throw Error(
+          "Migration materials changed during execution; stopped. Review materials before rerunning",
+        );
     };
     const recover = async () => {
       const p = state.pending;
@@ -595,7 +711,7 @@ export async function migrateModules(options: MigrationOptions) {
           [...p.files].sort((a, b) => a.name.localeCompare(b.name)),
         )
       )
-        throw Error("模块集成暂存被修改");
+        throw Error("Module integration staging was modified");
       const head = await git(i.project, ["rev-parse", "HEAD"]);
       let accepted = head;
       if (head !== p.base) {
@@ -603,7 +719,7 @@ export async function migrateModules(options: MigrationOptions) {
           (await git(i.project, ["rev-parse", "HEAD^"])) !== p.base ||
           (await git(i.project, ["log", "-1", "--format=%B"])) !== p.message
         )
-          throw Error("中断后 HEAD 发生其他变化，保留现场");
+          throw Error("HEAD changed after interruption; state preserved");
         const changed = (
           await git(i.project, [
             "diff-tree",
@@ -620,20 +736,22 @@ export async function migrateModules(options: MigrationOptions) {
           JSON.stringify(changed) !==
           JSON.stringify(p.files.map((f) => f.name).sort())
         )
-          throw Error("恢复提交包含其他文件");
+          throw Error("Recovery commit contains unexpected files");
         await clean();
         await assertFiles(i.project, p.files);
       } else {
         const dirtyFiles = await dirty(i.project);
         if (dirtyFiles.some((n) => !p.files.some((f) => f.name === n)))
-          throw Error("恢复前需处理其他修改");
+          throw Error("Resolve unrelated changes before resuming");
         for (const f of staged) {
           if (await exists(path.join(i.project, f.name))) {
             if (
               hash(await readFile(await checkedFile(i.project, f.name))) !==
               f.sha256
             )
-              throw Error(`恢复拒绝覆盖用户修改：${f.name}`);
+              throw Error(
+                `Recovery refuses to overwrite user changes: ${f.name}`,
+              );
           } else await copyFiles(i.project, [f]);
         }
         const root = path.join(i.project, p.task),
@@ -643,7 +761,7 @@ export async function migrateModules(options: MigrationOptions) {
           v.report.status !== "behavior_verified" ||
           v.report.fingerprint !== p.fingerprint
         )
-          throw Error("模块提交前验证已失效");
+          throw Error("Verification became invalid before module commit");
         const { task } = await loadTask(root);
         cancel();
         const result = await executeGo(
@@ -660,7 +778,9 @@ export async function migrateModules(options: MigrationOptions) {
           counts.skipped ||
           !task.requiredJudgeTests?.every((n) => counts.passedNames.includes(n))
         )
-          throw Error("正式集成测试未通过；未提交，保留现场");
+          throw Error(
+            "Project integration tests failed; no commit created, state preserved",
+          );
         cancel();
         await unchanged();
         await assertFiles(i.project, p.files);
@@ -675,7 +795,9 @@ export async function migrateModules(options: MigrationOptions) {
       state.modules.push({ id: p.module, commit: accepted, files: p.files });
       delete state.pending;
       await save();
-      log(`${p.module} 模块已验收并提交 ${accepted.slice(0, 8)}`);
+      log(
+        `${p.module} module accepted and committed as ${accepted.slice(0, 8)}`,
+      );
     };
     cancel();
     await validDone(i, state);
@@ -684,7 +806,7 @@ export async function migrateModules(options: MigrationOptions) {
     const changes = await dirty(i.project);
     if (changes.some((n) => !allows(n, i.w.bootstrap)))
       throw Error(
-        `只自动提交迁移准备材料；请先处理其他修改：${changes.filter((n) => !allows(n, i.w.bootstrap)).join(", ")}`,
+        `Only migration preparation materials are committed automatically; resolve unrelated changes first: ${changes.filter((n) => !allows(n, i.w.bootstrap)).join(", ")}`,
       );
     if (changes.length) {
       await commit(
@@ -692,7 +814,7 @@ export async function migrateModules(options: MigrationOptions) {
         changes,
         "chore: prepare module migration inputs",
       );
-      log("迁移准备材料已提交");
+      log("Migration preparation materials committed");
     }
     await save();
     while (state.modules.length - initialCount < limit) {
@@ -711,7 +833,7 @@ export async function migrateModules(options: MigrationOptions) {
           module: next.module.id,
           verifiedSteps: state.steps.map((s) => s.key),
           blocked: next.blocked,
-          note: "已验收步骤保留在 .portsmith；补充后续契约/测试后重跑同一命令，不会重做已完成步骤，也不会提前提交整个模块。",
+          note: "Accepted steps are preserved in .portsmith. Add the remaining contracts/tests and rerun the same command; completed steps will not be repeated and the module will not be committed prematurely.",
         };
       if (next.next) {
         const item = next.next,
@@ -748,7 +870,7 @@ export async function migrateModules(options: MigrationOptions) {
               ),
             });
         }
-        const seed: File[] = [...frozenAssets];
+        const seed: File[] = [...i.baseline, ...frozenAssets];
         for (const m of state.modules)
           for (const f of m.files.filter(
             (f) =>
@@ -774,14 +896,16 @@ export async function migrateModules(options: MigrationOptions) {
         if (!(await exists(root))) {
           const temp = root + ".preparing";
           if (await exists(temp))
-            throw Error(`存在中断准备目录 ${temp}；确认旧进程结束后移走再继续`);
+            throw Error(
+              `Interrupted preparation directory exists: ${temp}. Confirm the old process has exited, then move it aside before continuing`,
+            );
           try {
             await prepareTask({
               source: i.source,
               out: temp,
               files: item.spec.sources,
               revision: i.p.revision,
-              goal: `模块 ${item.module}，内部步骤 ${item.key}。\n${item.spec.goal}\n必须创建：${item.spec.outputs.join(", ")}。本模块前面文件可为整合修改，但必须通过累计验收。不得宣称整个模块完成。`,
+              goal: `Module ${item.module}, step ${item.key}.\n${item.spec.goal}\nRequired outputs: ${item.spec.outputs.join(", ")}. Earlier files in this module may be updated for integration, but cumulative acceptance must pass. Do not claim the entire module is complete.`,
               rules: path.join(i.root, "RULEBOOK.md"),
               goMod: path.join(i.project, "go.mod"),
               goSum: i.sum ? path.join(i.project, "go.sum") : undefined,
@@ -809,14 +933,14 @@ export async function migrateModules(options: MigrationOptions) {
           const { task } = await loadTask(root);
           if (task.planDigest !== taskSeal)
             throw Error(
-              `进行中步骤的材料或依赖已变化：${item.key}；需审查并移走该未完成任务目录后重试，已验收步骤保留`,
+              `Materials or dependencies changed for active step ${item.key}; review and move aside its unfinished task directory before retrying. Accepted steps are preserved`,
             );
           let v = await currentVerification(root),
             feedback: string | undefined;
           const validate = async () => {
             const files = await candidateFiles(root);
             if (ownNames.some((n) => !files.some((f) => f.name === n)))
-              throw Error("候选缺少必需输出");
+              throw Error("Candidate is missing required outputs");
             const allowed = new Set([
               ...ownNames,
               ...seed.map((f) => f.name),
@@ -826,7 +950,7 @@ export async function migrateModules(options: MigrationOptions) {
               ...(i.sum ? ["go.sum"] : []),
             ]);
             if (files.some((f) => !allowed.has(f.name)))
-              throw Error("候选存在未授权文件");
+              throw Error("Candidate contains unauthorized files");
             await verifyPort(root, options.download, options.signal);
             return currentVerification(root);
           };
@@ -845,12 +969,12 @@ export async function migrateModules(options: MigrationOptions) {
           ) {
             if (attempts > 0 && attempt >= attempts)
               throw Error(
-                `${item.key} 达到本次 ${attempts} 次生成/修复上限；候选与进度保留，重跑可继续。\n${v?.current ? verificationDiagnostics(v.report, 2000) : (feedback ?? "尚无有效验证报告")}\n报告：${path.join(root, "verification.json")}`,
+                `${item.key} reached the limit of ${attempts} generation/repair attempts for this run; candidate and progress preserved. Rerun to continue.\n${v?.current ? verificationDiagnostics(v.report, 2000) : (feedback ?? "No valid verification report yet")}\nReport: ${path.join(root, "verification.json")}`,
               );
             cancel();
             state.attempts[item.key] = (state.attempts[item.key] ?? 0) + 1;
             await save();
-            log(`${item.key} 生成/修复 ${state.attempts[item.key]}`);
+            log(`${item.key} generation/repair ${state.attempts[item.key]}`);
             const generated = await options.generate(root, feedback);
             cancel();
             if (
@@ -863,14 +987,14 @@ export async function migrateModules(options: MigrationOptions) {
               ].includes(generated.status)
             )
               throw Error(
-                `模型运行失败：${generated.error ?? generated.status}；详情：${path.join(root, "last-run.json")}；候选保留`,
+                `Model run failed: ${generated.error ?? generated.status}; details: ${path.join(root, "last-run.json")}; candidate preserved`,
               );
             try {
               v = await validate();
               feedback =
                 v?.report.status === "behavior_verified"
                   ? undefined
-                  : "累计验证失败，请读取诊断修复；不可修改冻结 judge";
+                  : "Cumulative verification failed; read diagnostics and repair without modifying frozen judges";
             } catch (e) {
               v = undefined;
               feedback = String(e);
@@ -889,7 +1013,9 @@ export async function migrateModules(options: MigrationOptions) {
             files: entries(files),
           });
           await save();
-          log(`${item.key} 已通过累计验收并保存；正式模块尚未提交`);
+          log(
+            `${item.key} passed cumulative acceptance and was saved; module not yet committed`,
+          );
         });
         continue;
       }
@@ -907,11 +1033,13 @@ export async function migrateModules(options: MigrationOptions) {
         task.goSumSha256 !== (i.sum && hash(i.sum))
       )
         throw Error(
-          "最后步骤后依赖发生变化；需新增模块回归步骤，不能沿用旧验收提交",
+          "Dependencies changed after the last step; add a module regression step instead of committing with old acceptance evidence",
         );
       const report = await verifyPort(root, options.download, options.signal);
       if (report.status !== "behavior_verified")
-        throw Error("模块最终累计验证失败，未提交");
+        throw Error(
+          "Final cumulative module verification failed; no commit created",
+        );
       cancel();
       await unchanged();
       const files: File[] = [];
@@ -947,7 +1075,9 @@ export async function migrateModules(options: MigrationOptions) {
       });
       for (const f of files)
         if (await exists(path.join(i.project, f.name)))
-          throw Error(`集成拒绝覆盖已有文件：${f.name}`);
+          throw Error(
+            `Integration refuses to overwrite an existing file: ${f.name}`,
+          );
       const staging = path.posix.join(i.w.runs, `${module.id}-integration`);
       if (await exists(path.join(i.project, staging)))
         await rm(path.join(i.project, staging), { recursive: true });
